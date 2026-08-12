@@ -1,0 +1,25 @@
+# Copyright (c) 2026 Atellagent, Inc. All rights reserved.
+# This source code is licensed under the terms found in the LICENSE.md file in the root directory of this source tree.
+
+# Example connected bridge to a customer-local MCP stdio server.
+gateway_mtls_url: https://gateway.example.com
+oauth_token_url: https://auth.example.com/oidc/token
+oauth_jwks_url: https://auth.example.com/oidc/jwks
+client_id: mcp-service-account-xxxx
+service_account_id: sa-uuid-from-backend
+integration_id: integration-uuid-from-backend
+tenant_id: tenant-uuid-from-backend
+placement: connected
+protocol_version: v1
+packaging: bridge
+integration_type: mcp
+mcp_descriptor_path_template: /v1/connected-runtimes/instances/{instance_id}/descriptors/mcp
+capabilities:
+  - mcp.tools
+deployment:
+  type: bridge
+  target_transport: stdio
+  target_command: local-mcp-server
+telemetry_url: https://gateway.example.com/v1/monitoring/integrations/ingest
+
+timeout: 120

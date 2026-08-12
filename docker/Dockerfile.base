@@ -1,0 +1,61 @@
+# syntax=docker/dockerfile:1
+# Copyright (c) 2026 Atellagent, Inc. All rights reserved.
+# This source code is licensed under the terms found in the LICENSE.md file in the root directory of this source tree.
+
+FROM python:3.11-slim@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93 AS wheel-builder
+
+WORKDIR /src
+COPY . /src
+
+# The base image is deliberately core-only. A customer opts into a documented
+# integration extra at build time; optional SDKs are never silently included.
+ARG ATELLAGENT_CLIENT_EXTRAS=""
+
+# Build both the public wheel and its locked runtime dependencies.  The source
+# checkout ends in this stage and is never copied to the final image.
+RUN if [ -n "$ATELLAGENT_CLIENT_EXTRAS" ]; then \
+      package="/src[$ATELLAGENT_CLIENT_EXTRAS]"; \
+    else \
+      package="/src"; \
+    fi; \
+    pip wheel --no-cache-dir \
+      --constraint /src/requirements/constraints-py311.lock \
+      --wheel-dir /wheelhouse \
+      "$package"
+
+
+FROM python:3.11-slim@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93
+
+WORKDIR /opt/atellagent
+
+ARG ATELLAGENT_CLIENT_EXTRAS=""
+
+# Minimal runtime dependencies for external adapter execution.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=wheel-builder /wheelhouse /wheelhouse
+COPY --from=wheel-builder /src/LICENSE.md /licenses/LICENSE.md
+COPY --from=wheel-builder /src/THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
+RUN if [ -n "$ATELLAGENT_CLIENT_EXTRAS" ]; then \
+      package="atellagent-client[$ATELLAGENT_CLIENT_EXTRAS]"; \
+    else \
+      package="atellagent-client"; \
+    fi; \
+    pip install --no-cache-dir --no-index --find-links /wheelhouse \
+    "$package" \
+    && pip check \
+    && rm -rf /wheelhouse
+
+# Create non-root runtime user.
+RUN groupadd -g 10001 app && useradd -m -u 10001 -g app -s /bin/bash app \
+    && chown -R app:app /opt/atellagent /licenses
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+USER 10001:10001
+
+ENTRYPOINT ["atellagent-cli"]
+CMD ["--help"]

@@ -1,0 +1,23 @@
+# Copyright (c) 2026 Atellagent, Inc. All rights reserved.
+# This source code is licensed under the terms found in the LICENSE.md file in the root directory of this source tree.
+
+schema_version: v1
+mode: observe
+actions:
+  file.read:
+    readable_roots:
+      - /workspace/project
+    max_bytes: 262144
+  file.write:
+    writable_roots:
+      - /workspace/project
+    max_bytes: 262144
+  file.patch:
+    max_patch_hunks: 80
+  checks.run:
+    allowed_profiles:
+      - test
+      - lint
+  git.push:
+    allowed_git_targets:
+      - origin/main

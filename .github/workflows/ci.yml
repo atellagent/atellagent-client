@@ -1,0 +1,288 @@
+# Copyright (c) 2026 Atellagent, Inc. All rights reserved.
+# This source code is licensed under the terms found in the LICENSE.md file in the root directory of this source tree.
+
+name: CI (atellagent-client)
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-release-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify the clean source and import allowlists
+        run: |
+          python - <<'PY'
+          import ast
+          import sys
+          from pathlib import Path
+
+          root = Path.cwd()
+          tree = ast.parse((root / "setup.py").read_text(encoding="utf-8"))
+
+          def declared_tuple(name):
+              return next(
+                  ast.literal_eval(node.value)
+                  for node in tree.body
+                  if isinstance(node, ast.Assign)
+                  and any(
+                      isinstance(target, ast.Name) and target.id == name
+                      for target in node.targets
+                  )
+              )
+
+          repository_entries = set(declared_tuple("PUBLIC_REPOSITORY_ENTRIES"))
+          actual_entries = {entry.name for entry in root.iterdir() if entry.name != ".git"}
+          assert actual_entries == repository_entries, (
+              "public source root must exactly match the approved allowlist; "
+              f"missing={sorted(repository_entries - actual_entries)} "
+              f"extra={sorted(actual_entries - repository_entries)}"
+          )
+          source_paths = set(declared_tuple("PUBLIC_SOURCE_PATHS"))
+          actual_paths = {
+              str(path.relative_to(root))
+              for path in root.rglob("*")
+              if path.is_file() and ".git" not in path.relative_to(root).parts
+          }
+          assert actual_paths == source_paths, (
+              "public source files must exactly match the approved allowlist; "
+              f"missing={sorted(source_paths - actual_paths)} "
+              f"extra={sorted(actual_paths - source_paths)}"
+          )
+
+          packages = declared_tuple("PUBLIC_PACKAGES")
+          actual = {"atellagent_client"}
+          for init_file in root.rglob("__init__.py"):
+              relative = init_file.parent.relative_to(root)
+              if str(relative) == ".":
+                  continue
+              actual.add("atellagent_client." + ".".join(relative.parts))
+          expected = set(packages)
+          assert actual == expected, (
+              "PUBLIC_PACKAGES must exactly match package directories; "
+              f"missing={sorted(actual - expected)} extra={sorted(expected - actual)}"
+          )
+
+          import_roots = {
+              "atellagent_client",
+              *declared_tuple("PUBLIC_THIRD_PARTY_IMPORT_ROOTS"),
+          }
+          standard_library = set(sys.stdlib_module_names) | {"__future__"}
+          unapproved = {}
+          for source in root.rglob("*.py"):
+              parsed = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+              for node in ast.walk(parsed):
+                  if isinstance(node, ast.Import):
+                      names = [alias.name for alias in node.names]
+                  elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                      names = [node.module]
+                  else:
+                      continue
+                  for name in names:
+                      import_root = name.split(".", 1)[0]
+                      if import_root not in standard_library and import_root not in import_roots:
+                          unapproved.setdefault(import_root, set()).add(
+                              str(source.relative_to(root))
+                          )
+          assert not unapproved, (
+              "public source imports an unapproved dependency: "
+              + "; ".join(
+                  f"{name} from {sorted(paths)}" for name, paths in sorted(unapproved.items())
+              )
+          )
+          print(f"verified source root, {len(expected)} packages, and import allowlist")
+          PY
+
+      - name: Install the locked public runtime and documented extras
+        run: |
+          python -m pip install --upgrade pip==24.0
+          pip install --constraint requirements/constraints-py311.lock '.[test,mcp-agent-proxy,mcp-tool-proxy]'
+          pip check
+          python - <<'PY'
+          import anthropic
+          import mcp
+          import google.genai
+          import langgraph
+          import ollama
+          import openai
+          import psycopg
+          import transformers
+          print("documented optional integrations import")
+          PY
+
+      - name: Reject direct provider-to-MCP coupling
+        run: |
+          ! rg -n \
+            'MCPServer|HostedMCP|McpToolset|mcp_servers|streamable_http|claude_agent_sdk|openai_agents|google_adk' \
+            integrations/providers
+          ! rg -n 'claude-agent-sdk|openai-agents|google-adk' \
+            setup.py requirements
+
+      - name: Compile public Python sources
+        run: python -m compileall -q cli connected examples governance integrations pep protocol proxy sdk __init__.py _version.py
+
+      - name: Run credential-free provider integration tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Build wheel and source distribution
+        run: |
+          python -m pip install build==1.5.0
+          python -m build --sdist --wheel
+
+      - name: Verify positive source and artifact allowlists
+        run: |
+          python - <<'PY'
+          from pathlib import Path, PurePosixPath
+          import ast
+          import glob
+          import tarfile
+          import zipfile
+
+          root = Path.cwd()
+          tree = ast.parse((root / "setup.py").read_text(encoding="utf-8"))
+          def declared_tuple(name):
+              return next(
+                  ast.literal_eval(node.value)
+                  for node in tree.body
+                  if isinstance(node, ast.Assign)
+                  and any(
+                      isinstance(target, ast.Name) and target.id == name
+                      for target in node.targets
+                  )
+              )
+          packages = set(declared_tuple("PUBLIC_PACKAGES"))
+          package_roots = {package.split(".", 1)[1].split(".", 1)[0] for package in packages if "." in package}
+          source_paths = set(declared_tuple("PUBLIC_SOURCE_PATHS"))
+          expected_package_files = {
+              "atellagent_client/" + path
+              for path in source_paths
+              if (
+                  path in {"__init__.py", "_version.py", "py.typed"}
+                  or (
+                      path.split("/", 1)[0] in package_roots
+                      and PurePosixPath(path).suffix in {".py", ".yaml"}
+                  )
+              )
+          }
+          root_files = {
+              "CHANGELOG.md", "COMPATIBILITY.md", "LICENSE.md", "MANIFEST.in",
+              "PKG-INFO", "README.md", "SECURITY.md", "SUPPORT.md",
+              "THIRD_PARTY_NOTICES.md", "__init__.py", "_version.py", "py.typed",
+              "pyproject.toml", "setup.cfg", "setup.py",
+          }
+          sdist_roots = root_files | package_roots | {"docs", "requirements"}
+          expected_init_files = {
+              package.replace(".", "/") + "/__init__.py"
+              for package in packages
+          }
+
+          wheel_path = Path(glob.glob("dist/*.whl")[0])
+          with zipfile.ZipFile(wheel_path) as wheel:
+              names = set(wheel.namelist())
+          assert expected_init_files <= names, "wheel is missing an approved package"
+          actual_package_files = {
+              name for name in names if name.startswith("atellagent_client/")
+          }
+          assert actual_package_files == expected_package_files, (
+              "wheel package files must exactly match the positive source-derived allowlist; "
+              f"missing={sorted(expected_package_files - actual_package_files)} "
+              f"extra={sorted(actual_package_files - expected_package_files)}"
+          )
+          for name in names:
+              path = PurePosixPath(name)
+              if path.parts[0] != "atellagent_client":
+                  continue
+              if len(path.parts) == 1:
+                  raise AssertionError(f"unexpected wheel package entry: {name}")
+              if path.parts[1] not in package_roots | {"__init__.py", "_version.py", "py.typed"}:
+                  raise AssertionError(f"wheel package entry is outside the allowlist: {name}")
+
+          sdist_path = Path(glob.glob("dist/*.tar.gz")[0])
+          with tarfile.open(sdist_path) as sdist:
+              names = [member.name for member in sdist.getmembers()]
+          root_name = names[0].split("/", 1)[0]
+          for name in names:
+              relative = "" if name == root_name else name.removeprefix(root_name + "/")
+              if not relative:
+                  continue
+              top_level = relative.split("/", 1)[0]
+              if top_level not in sdist_roots:
+                  raise AssertionError(f"sdist entry is outside the allowlist: {relative}")
+          print("wheel and sdist allowlists verified")
+          PY
+
+      - name: Smoke test the installed wheel outside the checkout
+        run: |
+          python -m venv /tmp/atellagent-client-wheel-test
+          wheel_path=$(echo "$GITHUB_WORKSPACE"/dist/*.whl)
+          /tmp/atellagent-client-wheel-test/bin/pip install \
+            --constraint "$GITHUB_WORKSPACE/requirements/constraints-py311.lock" \
+            "${wheel_path}[test,mcp-agent-proxy,mcp-tool-proxy]"
+          cd /tmp
+          /tmp/atellagent-client-wheel-test/bin/python - <<'PY'
+          import anthropic
+          import mcp
+          import google.genai
+          import langgraph
+          import ollama
+          import openai
+          import psycopg
+          import transformers
+          import atellagent_client
+          from atellagent_client.examples import bundled_example_path
+          from atellagent_client.pep import load_local_guardrail_manifest
+          from atellagent_client.connected import ConnectedParticipant
+          from atellagent_client.sdk import ConnectedSDKRuntime
+          from atellagent_client.proxy import MCPAgentProxy, MCPToolProxy
+
+          assert atellagent_client.__version__
+          manifest = load_local_guardrail_manifest(
+              str(bundled_example_path("config/local_guardrails.yaml"))
+          )
+          assert manifest.mode == "observe"
+          assert ConnectedParticipant
+          assert ConnectedSDKRuntime
+          assert MCPAgentProxy and MCPToolProxy
+          print("installed wheel smoke ok")
+          PY
+          /tmp/atellagent-client-wheel-test/bin/atellagent-agent-proxy --help >/dev/null
+          /tmp/atellagent-client-wheel-test/bin/atellagent-tool-proxy --help >/dev/null
+
+      - name: Verify the standard client install has no MCP SDK dependency
+        run: |
+          python -m venv /tmp/atellagent-client-standard-test
+          wheel_path=$(echo "$GITHUB_WORKSPACE"/dist/*.whl)
+          /tmp/atellagent-client-standard-test/bin/pip install \
+            --constraint "$GITHUB_WORKSPACE/requirements/constraints-py311.lock" \
+            "${wheel_path}"
+          cd /tmp
+          ! /tmp/atellagent-client-standard-test/bin/python -c 'import mcp'
+
+  docker-smoke:
+    needs: public-release-boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and inspect the client runtime image
+        run: |
+          docker build -f docker/Dockerfile.base -t atellagent-client:inspect .
+          docker run --rm --entrypoint /bin/sh atellagent-client:inspect -ec '
+            test ! -e /src
+            test -f /licenses/LICENSE.md
+            test -f /licenses/THIRD_PARTY_NOTICES.md
+            atellagent-cli --help >/dev/null
+          '

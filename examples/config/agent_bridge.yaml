@@ -1,0 +1,21 @@
+# Copyright (c) 2026 Atellagent, Inc. All rights reserved.
+# This source code is licensed under the terms found in the LICENSE.md file in the root directory of this source tree.
+
+# Example only. The dashboard-generated bundle supplies real immutable IDs.
+gateway_mtls_url: https://gateway.example.com
+oauth_token_url: https://auth.example.com/oidc/token
+oauth_jwks_url: https://auth.example.com/oidc/jwks
+client_id: service-account-xxxx
+service_account_id: sa-uuid-from-backend
+integration_id: integration-uuid-from-backend
+tenant_id: tenant-uuid-from-backend
+placement: connected
+protocol_version: v1
+packaging: bridge
+integration_type: agent
+capabilities:
+  - agent.process
+deployment:
+  type: bridge
+  target_transport: handler
+timeout: 120

@@ -1,0 +1,14 @@
+.git
+.github
+.pytest_cache
+.mypy_cache
+__pycache__
+*.py[cod]
+build
+dist
+*.egg-info
+tests
+*.md
+!README.md
+!LICENSE.md
+!THIRD_PARTY_NOTICES.md

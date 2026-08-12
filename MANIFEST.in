@@ -1,0 +1,23 @@
+# Copyright (c) 2026 Atellagent, Inc. All rights reserved.
+# This source code is licensed under the terms found in the LICENSE.md file in the root directory of this source tree.
+
+include README.md
+include LICENSE.md
+include THIRD_PARTY_NOTICES.md
+include SECURITY.md
+include SUPPORT.md
+include COMPATIBILITY.md
+include CHANGELOG.md
+include py.typed
+include requirements/constraints-py311.lock
+include __init__.py
+include _version.py
+recursive-include cli *.py
+recursive-include connected *.py
+recursive-include docs *.md
+recursive-include examples *.py *.yaml
+recursive-include governance *.py
+recursive-include integrations *.py
+recursive-include pep *.py
+recursive-include protocol *.py
+recursive-include sdk *.py

@@ -1,0 +1,25 @@
+# Copyright (c) 2026 Atellagent, Inc. All rights reserved.
+# This source code is licensed under the terms found in the LICENSE.md file in the root directory of this source tree.
+
+# Non-secret service-account bundle for a customer-operated workflow participant.
+# Supply mTLS certificate paths through the environment.
+gateway_mtls_url: https://gateway.example.com
+oauth_token_url: https://auth.example.com/oidc/token
+oauth_jwks_url: https://auth.example.com/oidc/jwks
+client_id: service-account-xxxx
+service_account_id: sa-uuid-from-backend
+integration_id: integration-uuid-from-backend
+tenant_id: tenant-uuid-from-backend
+placement: connected
+protocol_version: v1
+packaging: sdk
+integration_type: workflow_runtime
+capabilities:
+  - workflow.compile
+  - workflow.execute
+  - workflow.resume
+  - workflow.cancel
+deployment:
+  type: sdk
+
+timeout: 120
