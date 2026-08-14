@@ -495,6 +495,21 @@ generated YAML. Runtime options are `--handler module:attribute`,
 then drains without accepting ongoing work. Use the dedicated MCP compatibility
 proxy commands for MCP peers.
 
+For a supported external-agent hook, run the enrolled control boundary on a
+user-owned Unix socket:
+
+```bash
+atellagent-cli ./hook-control.yaml --hook-control-socket "$XDG_RUNTIME_DIR/atellagent/control.sock"
+```
+
+That YAML must describe a connected `agent` boundary with exactly the
+provisioned `agent.control` capability and `boundary_identity_only` identity
+mode. The service exposes only turn-entry model decisions, tool preflight and
+postflight, and health discovery. It opens no TCP listener; the socket and its
+parent directory are owner-only, and hook processes hold no Atellagent
+credential. A missing service, expired directive, control timeout, or an
+obligation the hook protocol cannot fulfill is a deny—not a local allow.
+
 `--enroll` selects enrollment instead of runtime execution and prompts for the
 single-use token without echo. `--cert-path` and `--key-path` override its two
 output paths. `--replace-credentials` is permitted only with `--enroll` and is

@@ -15,11 +15,21 @@ from .capabilities import (
     RuntimeWaitCapabilitySet,
     runtime_wait_capability_set,
 )
+from .hook_control import (
+    HOOK_CONTROL_PROTOCOL,
+    HookControlClient,
+    HookControlError,
+    HookControlRuntime,
+)
 
 __all__ = [
     "BoundaryExecutionMetadata",
     "BoundaryExecutionOutcome",
     "BoundaryToolCall",
+    "HOOK_CONTROL_PROTOCOL",
+    "HookControlClient",
+    "HookControlError",
+    "HookControlRuntime",
     "ProviderCapabilitySet",
     "RuntimeWaitCapabilitySet",
     "extract_boundary_tool_call",

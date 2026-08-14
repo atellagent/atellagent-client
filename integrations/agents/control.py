@@ -48,11 +48,26 @@ class ExternalAgentGovernance:
     def __init__(
         self,
         config: ServiceAccountConfig,
+        *,
+        session_provider: Optional[Callable[[], GatewaySession]] = None,
     ) -> None:
         self.config = config
-        self.gateway_session = GatewaySession.from_service_account_config(config)
+        self._session_provider = session_provider
+        self._gateway_session = (
+            None if session_provider is not None else GatewaySession.from_service_account_config(config)
+        )
+        self._owns_gateway_session = session_provider is None
         self.identity_mode = resolve_identity_mode_from_config(config)
         self.action_gate = RuntimeActionGate.from_config(config)
+
+    @property
+    def gateway_session(self) -> GatewaySession:
+        """Return the current gateway session for this execution boundary."""
+        if self._session_provider is not None:
+            return self._session_provider()
+        if self._gateway_session is None:  # pragma: no cover - constructor invariant
+            raise RuntimeError("gateway session is unavailable")
+        return self._gateway_session
 
     @classmethod
     def from_config_path(
@@ -377,10 +392,12 @@ class ExternalAgentGovernance:
         )
 
     def close(self) -> None:
-        self.gateway_session.close_sync()
+        if self._owns_gateway_session:
+            self.gateway_session.close_sync()
 
     async def close_async(self) -> None:
-        await self.gateway_session.close_async()
+        if self._owns_gateway_session:
+            await self.gateway_session.close_async()
 
 
 __all__ = [
