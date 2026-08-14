@@ -10,7 +10,7 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from atellagent_client.integrations.agents.hook_control import (
@@ -18,6 +18,7 @@ from atellagent_client.integrations.agents.hook_control import (
     HookControlError,
     HookControlRuntime,
 )
+from atellagent_client.sdk.errors import PolicyViolationError
 from atellagent_client.governance import ActionDenied
 from atellagent_client.protocol.agent_contracts import GovernanceReceipt, ModelDecision
 from atellagent_client.sdk.config_models import SDKDeploymentConfig, ServiceAccountConfig
@@ -227,6 +228,21 @@ class HookControlRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 "model.decision",
                 {**self._turn_fields(), "messages": [{"role": "user", "content": "slow"}]},
             )
+
+    async def test_policy_denial_returns_a_normal_hook_deny(self) -> None:
+        params = {
+            **self._turn_fields(),
+            "tool_call_id": "tool-policy-denied",
+            "tool_name": "shell.execute",
+            "arguments": {"command": "pwd"},
+        }
+        self.governance.preflight_async = AsyncMock(
+            side_effect=PolicyViolationError("blocked", "opa_policy")
+        )
+
+        result = await self.client.call("action.preflight", params)
+
+        self.assertEqual(result, {"allowed": False, "reason_code": "opa_policy"})
 
     async def test_concurrent_actions_are_isolated_and_postflight_retries(self) -> None:
         first = {

@@ -409,6 +409,13 @@ class HookControlRuntime:
             async with self._pending_lock:
                 self._reserving.discard(pending_key)
                 self._pending[pending_key] = _PendingAction(context=context, receipt=receipt)
+        except PolicyViolationError as exc:
+            async with self._pending_lock:
+                self._reserving.discard(pending_key)
+            return {
+                "allowed": False,
+                "reason_code": str(exc.violation_type or "policy_denied"),
+            }
         except Exception:
             async with self._pending_lock:
                 self._reserving.discard(pending_key)
