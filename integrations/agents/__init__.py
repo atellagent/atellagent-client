@@ -26,11 +26,20 @@ from .host_hooks import (
     handle_host_hook,
     host_hook_capabilities,
 )
+from .anthropic_facade import (
+    AnthropicFacadeError,
+    AnthropicFacadeResponse,
+    AnthropicMessagesFacadeRuntime,
+    load_route_facade_capability_token,
+)
 
 __all__ = [
     "BoundaryExecutionMetadata",
     "BoundaryExecutionOutcome",
     "BoundaryToolCall",
+    "AnthropicFacadeError",
+    "AnthropicFacadeResponse",
+    "AnthropicMessagesFacadeRuntime",
     "HOOK_CONTROL_PROTOCOL",
     "HookControlClient",
     "HookControlError",
@@ -41,6 +50,7 @@ __all__ = [
     "extract_boundary_tool_call",
     "handle_host_hook",
     "host_hook_capabilities",
+    "load_route_facade_capability_token",
     "normalize_boundary_execution_outcome",
     "runtime_wait_capability_set",
 ]

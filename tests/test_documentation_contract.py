@@ -38,6 +38,7 @@ class DocumentationContractTests(unittest.TestCase):
             "integrations/channels/README.md",
             "integrations/workflows/README.md",
             "docs/hosts/claude-code.md",
+            "docs/hosts/claude-code-route-mode.md",
             "docs/hosts/codex.md",
             "docs/hosts/gemini-cli.md",
             "docs/hosts/claude-cowork.md",
@@ -55,6 +56,7 @@ class DocumentationContractTests(unittest.TestCase):
             "../integrations/README.md",
             "../docker/README.md",
             "hosts/claude-code.md",
+            "hosts/claude-code-route-mode.md",
             "hosts/codex.md",
             "hosts/gemini-cli.md",
             "hosts/claude-cowork.md",
@@ -95,6 +97,10 @@ class DocumentationContractTests(unittest.TestCase):
         for page in ("docs/hosts/gemini-cli.md", "docs/hosts/claude-cowork.md"):
             self.assertIn("deferred", self.docs[page].lower())
             self.assertIn("does not", self.docs[page].lower())
+        route = self.docs["docs/hosts/claude-code-route-mode.md"]
+        self.assertIn("`full_model_request`", route)
+        self.assertIn("`stream: true`", route)
+        self.assertIn("not preserved", route.lower())
 
     def test_public_guide_links_resolve(self) -> None:
         for relative_path, text in self.docs.items():
@@ -122,7 +128,11 @@ class DocumentationContractTests(unittest.TestCase):
             "atellagent_client.governance": ("RuntimeActionGate",),
             "atellagent_client.pep": ("ActionIntent", "evaluate_action"),
             "atellagent_client.proxy": ("MCPAgentProxy", "MCPToolProxy"),
-            "atellagent_client.integrations.agents": ("HookControlRuntime", "host_hook_capabilities"),
+            "atellagent_client.integrations.agents": (
+                "AnthropicMessagesFacadeRuntime",
+                "HookControlRuntime",
+                "host_hook_capabilities",
+            ),
             "atellagent_client.integrations.providers": ("GovernedProviderSession", "ModelGovernanceMode"),
             "atellagent_client.integrations.tools": ("PostgresTools",),
             "atellagent_client.integrations.models": ("ModelRuntimeHandler",),
