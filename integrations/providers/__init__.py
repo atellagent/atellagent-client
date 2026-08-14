@@ -3,4 +3,22 @@
 
 """Provider-native function-tool bridges backed by Atellagent governance."""
 
-__all__ = ["anthropic", "google", "governed_tools", "openai"]
+from .session import (
+    DecisionModelTransport,
+    GovernedProviderSession,
+    GovernedSessionResult,
+    ModelGovernanceMode,
+    RouteModelTransport,
+)
+
+__all__ = [
+    "anthropic",
+    "google",
+    "governed_tools",
+    "openai",
+    "DecisionModelTransport",
+    "GovernedProviderSession",
+    "GovernedSessionResult",
+    "ModelGovernanceMode",
+    "RouteModelTransport",
+]

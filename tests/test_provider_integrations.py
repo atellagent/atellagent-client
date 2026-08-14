@@ -15,6 +15,7 @@ from atellagent_client.integrations.providers.governed_tools import (
     GovernedToolIngress,
 )
 from atellagent_client.integrations.providers.openai import tool_bridge as openai_tool_bridge
+from atellagent_client.sdk.errors import PolicyTransportError, PolicyViolationError
 
 
 class _Client:
@@ -73,48 +74,6 @@ class ProviderIntegrationTests(unittest.TestCase):
         })
         self.assertEqual(client.calls[0][1]["tool_call_id"], "openai-call-1")
 
-    def test_openai_tool_loop_returns_only_governed_result_to_follow_up_turn(self) -> None:
-        client, ingress = _ingress("openai")
-        bridge = openai_tool_bridge(ingress=ingress)
-        requests = []
-
-        async def create_response(**kwargs):
-            requests.append(kwargs)
-            return (
-                {"id": "response-1", "output": [{"type": "function_call", "name": "read_file", "call_id": "openai-call-1", "arguments": '{"path":"/safe/path"}'}]}
-                if len(requests) == 1
-                else {"id": "response-2", "output": [{"type": "message", "content": "done"}]}
-            )
-
-        response = asyncio.run(
-            bridge.run_tool_loop(
-                create_response=create_response,
-                request={"model": "test-model", "input": "read the file"},
-            )
-        )
-
-        self.assertEqual(response["id"], "response-2")
-        self.assertEqual(client.calls[0][1]["tool_call_id"], "openai-call-1")
-        self.assertEqual(requests[1]["input"], [{"type": "function_call_output", "call_id": "openai-call-1", "output": "governed result"}])
-
-    def test_openai_sdk_client_entry_point_uses_responses_create(self) -> None:
-        client, ingress = _ingress("openai")
-        bridge = openai_tool_bridge(ingress=ingress)
-
-        class _Responses:
-            async def create(self, **_kwargs):
-                return {"id": "response-1", "output": []}
-
-        class _OpenAIClient:
-            responses = _Responses()
-
-        response = asyncio.run(
-            bridge.run_with_client(
-                client=_OpenAIClient(), request={"model": "test-model", "input": "hello"}
-            )
-        )
-        self.assertEqual(response["id"], "response-1")
-
     def test_google_native_function_call_routes_to_governed_ingress(self) -> None:
         client, ingress = _ingress("google")
         bridge = google_tool_bridge(ingress=ingress)
@@ -130,49 +89,6 @@ class ProviderIntegrationTests(unittest.TestCase):
         self.assertEqual(result["function_response"]["response"], {"result": "governed result"})
         self.assertEqual(client.calls[0][1]["tool_call_id"], "google-call-1")
 
-    def test_google_tool_loop_returns_native_function_response_after_governance(self) -> None:
-        client, ingress = _ingress("google")
-        bridge = google_tool_bridge(ingress=ingress)
-        requests = []
-
-        async def generate_content(**kwargs):
-            requests.append(kwargs)
-            return (
-                {"candidates": [{"content": {"role": "model", "parts": [{"functionCall": {"name": "read_file", "id": "google-call-1", "args": {"path": "/safe/path"}}}]}}]}
-                if len(requests) == 1
-                else {"candidates": [{"content": {"role": "model", "parts": [{"text": "done"}]}}]}
-            )
-
-        response = asyncio.run(
-            bridge.run_tool_loop(
-                generate_content=generate_content,
-                request={"model": "test-model", "contents": [{"role": "user", "parts": [{"text": "read the file"}]}]},
-            )
-        )
-
-        self.assertEqual(response["candidates"][0]["content"]["parts"][0]["text"], "done")
-        self.assertEqual(client.calls[0][1]["tool_call_id"], "google-call-1")
-        self.assertEqual(requests[1]["contents"][-1]["parts"][0]["function_response"]["id"], "google-call-1")
-
-    def test_google_sdk_client_entry_point_uses_models_generate_content(self) -> None:
-        _client, ingress = _ingress("google")
-        bridge = google_tool_bridge(ingress=ingress)
-
-        class _Models:
-            async def generate_content(self, **_kwargs):
-                return {"candidates": [{"content": {"role": "model", "parts": [{"text": "done"}]}}]}
-
-        class _GoogleClient:
-            models = _Models()
-
-        response = asyncio.run(
-            bridge.run_with_client(
-                client=_GoogleClient(),
-                request={"model": "test-model", "contents": [{"role": "user", "parts": [{"text": "hello"}]}]},
-            )
-        )
-        self.assertEqual(response["candidates"][0]["content"]["parts"][0]["text"], "done")
-
     def test_anthropic_native_tool_use_routes_to_governed_ingress(self) -> None:
         client, ingress = _ingress("anthropic")
         bridge = anthropic_tool_bridge(ingress=ingress)
@@ -187,48 +103,57 @@ class ProviderIntegrationTests(unittest.TestCase):
         self.assertEqual(result, {"type": "tool_result", "tool_use_id": "toolu-1", "content": "governed result"})
         self.assertEqual(client.calls[0][1]["tool_call_id"], "toolu-1")
 
-    def test_anthropic_tool_loop_returns_tool_result_after_governance(self) -> None:
-        client, ingress = _ingress("anthropic")
-        bridge = anthropic_tool_bridge(ingress=ingress)
-        requests = []
+    def test_tool_only_provider_loops_are_not_public(self) -> None:
+        for bridge in (
+            openai_tool_bridge(ingress=_ingress("openai")[1]),
+            google_tool_bridge(ingress=_ingress("google")[1]),
+            anthropic_tool_bridge(ingress=_ingress("anthropic")[1]),
+        ):
+            self.assertFalse(hasattr(bridge, "run_tool_loop"))
+            self.assertFalse(hasattr(bridge, "run_with_client"))
 
-        async def create_message(**kwargs):
-            requests.append(kwargs)
-            return (
-                {"content": [{"type": "tool_use", "name": "read_file", "id": "toolu-1", "input": {"path": "/safe/path"}}]}
-                if len(requests) == 1
-                else {"content": [{"type": "text", "text": "done"}]}
-            )
+    def test_denied_tool_and_pep_error_propagate_without_native_result(self) -> None:
+        class DenyingClient(_Client):
+            async def call_mcp_tool_async(self, *_args, **_kwargs):
+                raise PolicyViolationError("tool denied", "tool.denied", {"correlation_id": "c-1"})
 
-        response = asyncio.run(
-            bridge.run_tool_loop(
-                create_message=create_message,
-                request={"model": "test-model", "max_tokens": 100, "messages": [{"role": "user", "content": "read the file"}]},
-            )
+        ingress = GovernedToolIngress(
+            client=DenyingClient(),
+            provider="openai",
+            descriptors=_ingress("openai")[1].descriptors,
         )
-
-        self.assertEqual(response["content"][0]["text"], "done")
-        self.assertEqual(client.calls[0][1]["tool_call_id"], "toolu-1")
-        self.assertEqual(requests[1]["messages"][-1]["content"], [{"type": "tool_result", "tool_use_id": "toolu-1", "content": "governed result"}])
-
-    def test_anthropic_sdk_client_entry_point_uses_messages_create(self) -> None:
-        _client, ingress = _ingress("anthropic")
-        bridge = anthropic_tool_bridge(ingress=ingress)
-
-        class _Messages:
-            async def create(self, **_kwargs):
-                return {"content": [{"type": "text", "text": "done"}]}
-
-        class _AnthropicClient:
-            messages = _Messages()
-
-        response = asyncio.run(
-            bridge.run_with_client(
-                client=_AnthropicClient(),
-                request={"model": "test-model", "max_tokens": 10, "messages": [{"role": "user", "content": "hello"}]},
+        with self.assertRaisesRegex(PolicyViolationError, "tool denied"):
+            asyncio.run(
+                openai_tool_bridge(ingress=ingress).execute_function_call(
+                    {
+                        "type": "function_call",
+                        "name": "read_file",
+                        "call_id": "openai-call-1",
+                        "arguments": '{"path":"/safe/path"}',
+                    }
+                )
             )
+
+        class FailingPepClient(_Client):
+            async def call_mcp_tool_async(self, *_args, **_kwargs):
+                raise PolicyTransportError("tool PEP unavailable")
+
+        failing_ingress = GovernedToolIngress(
+            client=FailingPepClient(),
+            provider="openai",
+            descriptors=_ingress("openai")[1].descriptors,
         )
-        self.assertEqual(response["content"][0]["text"], "done")
+        with self.assertRaisesRegex(PolicyTransportError, "tool PEP unavailable"):
+            asyncio.run(
+                openai_tool_bridge(ingress=failing_ingress).execute_function_call(
+                    {
+                        "type": "function_call",
+                        "name": "read_file",
+                        "call_id": "openai-call-2",
+                        "arguments": '{"path":"/safe/path"}',
+                    }
+                )
+            )
 
 
 if __name__ == "__main__":

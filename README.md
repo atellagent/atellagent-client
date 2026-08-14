@@ -211,6 +211,7 @@ from atellagent_client.integrations.providers.governed_tools import (
 )
 from atellagent_client.sdk.client import AtellagentClient
 from atellagent_client.sdk.config import load_service_account_config_from_yaml
+from atellagent_client.integrations.agents.control import ExternalAgentGovernance
 from anthropic import AsyncAnthropic
 
 service_account_config = load_service_account_config_from_yaml("integration.yaml")
@@ -235,30 +236,47 @@ bridge = tool_bridge(
 )
 anthropic_client = AsyncAnthropic()
 
-# Atellagent drives the tool-use turns. The provider SDK performs model
-# requests only; the model never gets an execution callback.
-response = await bridge.run_tool_loop(
-    create_message=anthropic_client.messages.create,
-    request={
-        "model": "claude-sonnet-4-5",
-        "max_tokens": 1024,
-        "messages": [{"role": "user", "content": "Look up customer 42."}],
-    },
+# Each native provider request is wrapped by the governed session. The host
+# owns the provider SDK and its credential; the session asks Atellagent for a
+# decision before that request. It does not provide a tool-only loop.
+from atellagent_client.integrations.providers import (
+    GovernedProviderSession,
+    ModelGovernanceMode,
 )
+from atellagent_client.protocol import ModelDecisionRequest
+
+session = GovernedProviderSession(
+    governance=ExternalAgentGovernance(service_account_config),
+    mode=ModelGovernanceMode.DECISION,
+)
+messages = [{"role": "user", "content": "Look up customer 42."}]
+turn = await session.native_turn(
+    decision_request=ModelDecisionRequest(
+        input_scope="full_model_request",
+        messages=messages,
+        provider="anthropic",
+        model="claude-sonnet-4-5",
+        tool_definitions=bridge.tool_definitions(),
+        generation={"max_tokens": 1024},
+    ),
+    invoke=lambda: anthropic_client.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=1024,
+        messages=messages,
+        tools=bridge.tool_definitions(),
+    ),
+)
+response = turn.provider_payload
 ```
 
 Use `atellagent_client.integrations.providers.openai.tool_bridge` for OpenAI Responses API
 function calls and `atellagent_client.integrations.providers.google.tool_bridge` for Google
-GenAI function calls. Their `run_tool_loop` methods take `responses.create`
-and `models.generate_content`, respectively. Each loop returns a native
-tool-result envelope only after Atellagent has completed the requested invocation,
-then continues until the provider emits a terminal response.
-
-For the direct supported SDK entry point, pass the corresponding official SDK
-client to `bridge.run_with_client(client=..., request=...)`. It calls
-`responses.create`, `models.generate_content`, or `messages.create` as
-appropriate and confirms the matching optional dependency is installed. The
-lower-level callable form remains for customer wrappers.
+GenAI function calls. Each bridge only normalizes a native tool request and
+returns its governed result. After adding that result to the provider's next
+request, wrap the next provider request with `session.native_turn` again.
+Decision-mode transport never uses an Atellagent provider credential; route
+mode instead uses `session.route_turn`, which returns the canonical routed
+result and has no native-provider callback.
 
 ## PostgreSQL tools
 
