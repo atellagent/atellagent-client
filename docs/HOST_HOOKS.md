@@ -13,14 +13,14 @@ atellagent-cli ./hook-control.yaml \
 ```
 
 Use an absolute socket path in the host configuration. The adapter uses a
-five-second local deadline; all templates below give the host an eight-second
+seven-second local deadline; all templates below give the host an eight-second
 command timeout so an unavailable control service results in the adapter's
 exit-2 denial before the host timeout expires.
 
 ## Coverage
 
 `UserPromptSubmit` is governed as a `turn_entry` model decision: it covers the
-submitted host prompt before the host processes it, not later internal model
+submitted host prompt before the host processes it, not subsequent model
 requests. `PreToolUse` is a synchronous preflight. `PostToolUse` records the
 correlated outcome; Claude Code also supplies `PostToolUseFailure`.
 
@@ -33,6 +33,11 @@ Claude Cowork.
 The complete public coverage declaration is available from
 `atellagent_client.integrations.agents.host_hook_capabilities()` and in
 `examples/config/host-hook-capabilities.json`.
+
+Read the host-specific coverage matrices before deployment:
+[Claude Code](hosts/claude-code.md), [Codex](hosts/codex.md),
+[Gemini CLI (deferred)](hosts/gemini-cli.md), and
+[Claude Cowork (deferred)](hosts/claude-cowork.md).
 
 ## Claude Code
 

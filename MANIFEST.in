@@ -14,11 +14,18 @@ include requirements/container-core-py311.lock
 include __init__.py
 include _version.py
 recursive-include cli *.py
+include connected/README.md
 recursive-include connected *.py
 recursive-include docs *.md
 recursive-include examples *.py *.yaml *.json *.toml
 recursive-include governance *.py
+include governance/README.md
 recursive-include integrations *.py
+recursive-include integrations README.md
 recursive-include pep *.py
+include pep/README.md
 recursive-include protocol *.py
+include proxy/README.md
+recursive-include proxy *.py
+include sdk/README.md
 recursive-include sdk *.py
