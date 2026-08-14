@@ -21,6 +21,11 @@ from .hook_control import (
     HookControlError,
     HookControlRuntime,
 )
+from .host_hooks import (
+    HookAdapterResponse,
+    handle_host_hook,
+    host_hook_capabilities,
+)
 
 __all__ = [
     "BoundaryExecutionMetadata",
@@ -30,9 +35,12 @@ __all__ = [
     "HookControlClient",
     "HookControlError",
     "HookControlRuntime",
+    "HookAdapterResponse",
     "ProviderCapabilitySet",
     "RuntimeWaitCapabilitySet",
     "extract_boundary_tool_call",
+    "handle_host_hook",
+    "host_hook_capabilities",
     "normalize_boundary_execution_outcome",
     "runtime_wait_capability_set",
 ]

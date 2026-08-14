@@ -15,7 +15,7 @@ include _version.py
 recursive-include cli *.py
 recursive-include connected *.py
 recursive-include docs *.md
-recursive-include examples *.py *.yaml
+recursive-include examples *.py *.yaml *.json *.toml
 recursive-include governance *.py
 recursive-include integrations *.py
 recursive-include pep *.py

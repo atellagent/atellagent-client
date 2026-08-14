@@ -1,0 +1,12 @@
+# Place in the administrator-managed Codex configuration layer.
+[hooks]
+managed_dir = "/opt/atellagent/hooks"
+
+[[hooks.UserPromptSubmit]]
+hooks = [{ type = "command", command = "/opt/atellagent/hooks/atellagent-hook-adapter --host codex --socket /run/user/<uid>/atellagent/control.sock", timeout = 8 }]
+
+[[hooks.PreToolUse]]
+hooks = [{ type = "command", command = "/opt/atellagent/hooks/atellagent-hook-adapter --host codex --socket /run/user/<uid>/atellagent/control.sock", timeout = 8 }]
+
+[[hooks.PostToolUse]]
+hooks = [{ type = "command", command = "/opt/atellagent/hooks/atellagent-hook-adapter --host codex --socket /run/user/<uid>/atellagent/control.sock", timeout = 8 }]

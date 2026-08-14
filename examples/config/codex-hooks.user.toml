@@ -1,0 +1,8 @@
+[[hooks.UserPromptSubmit]]
+hooks = [{ type = "command", command = "atellagent-hook-adapter --host codex --socket /run/user/<uid>/atellagent/control.sock", timeout = 8 }]
+
+[[hooks.PreToolUse]]
+hooks = [{ type = "command", command = "atellagent-hook-adapter --host codex --socket /run/user/<uid>/atellagent/control.sock", timeout = 8 }]
+
+[[hooks.PostToolUse]]
+hooks = [{ type = "command", command = "atellagent-hook-adapter --host codex --socket /run/user/<uid>/atellagent/control.sock", timeout = 8 }]

@@ -509,6 +509,8 @@ postflight, and health discovery. It opens no TCP listener; the socket and its
 parent directory are owner-only, and hook processes hold no Atellagent
 credential. A missing service, expired directive, control timeout, or an
 obligation the hook protocol cannot fulfill is a deny—not a local allow.
+For Claude Code and Codex command-hook installation, coverage limits, and
+managed deployment templates, see [External coding-host hooks](docs/HOST_HOOKS.md).
 
 `--enroll` selects enrollment instead of runtime execution and prompts for the
 single-use token without echo. `--cert-path` and `--key-path` override its two

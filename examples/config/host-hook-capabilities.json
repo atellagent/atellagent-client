@@ -1,0 +1,16 @@
+{
+  "internal_deadline_seconds": 7.0,
+  "schema_version": "atellagent.host-hooks.v1",
+  "hosts": {
+    "claude-code": {
+      "transport": "command",
+      "events": {"UserPromptSubmit": "turn_entry", "PreToolUse": "preflight", "PostToolUse": "postflight_success", "PostToolUseFailure": "postflight_failure"},
+      "exclusions": ["mcp__atellagent__* (effect-boundary MCP PEP)"]
+    },
+    "codex": {
+      "transport": "command",
+      "events": {"UserPromptSubmit": "turn_entry", "PreToolUse": "preflight", "PostToolUse": "postflight_success"},
+      "exclusions": ["mcp__atellagent__* (effect-boundary MCP PEP)", "hosted or specialized tool paths outside documented command hooks"]
+    }
+  }
+}
