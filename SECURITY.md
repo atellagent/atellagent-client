@@ -30,3 +30,12 @@ behavior. Keep local configuration files owner-writable only.
 
 During credential rotation, generate replacement keys on the runtime host and
 follow the documented recovery procedure if activation cannot complete.
+
+## Portable image guidance
+
+Use the published image only by immutable digest, verify its release
+attestation/SBOM through the documented registry and GitHub tooling, and run it
+as UID/GID `10001` with a read-only root filesystem. Supply a writable identity
+volume and a `/tmp` tmpfs; mount configuration and customer code read-only.
+Never pass credentials or tokens as Docker build arguments or bake them into a
+derived image. Build, scan, and pin every customer-derived image separately.

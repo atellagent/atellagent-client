@@ -32,3 +32,14 @@ modules and managed-service behavior are not public support contracts.
   no longer authenticate.
 - Do not attach YAML containing tokens, certificate/key files, delivery
   capabilities, or customer payloads to support requests.
+
+## Portable-image troubleshooting
+
+- Confirm the exact manifest digest, client version, and image platform before
+  opening a support request. Do not send a registry token, identity volume, or
+  generated certificate material.
+- The base image has no customer handler or optional provider SDK. Use a pinned
+  derived image or a read-only customer-code mount for those components.
+- The image exposes no port. A local host-hook socket is generally a native
+  desktop deployment concern; Docker Desktop does not provide its user-owned
+  Unix-socket boundary to Linux containers.

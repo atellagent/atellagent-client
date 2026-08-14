@@ -512,6 +512,9 @@ obligation the hook protocol cannot fulfill is a deny—not a local allow.
 For Claude Code and Codex command-hook installation, coverage limits, and
 managed deployment templates, see [External coding-host hooks](docs/HOST_HOOKS.md).
 
+For the verified portable client image, one-shot enrollment, hardened runtime
+mounts, and digest-based updates, see [Portable Docker runtime](docker/README.md).
+
 `--enroll` selects enrollment instead of runtime execution and prompts for the
 single-use token without echo. `--cert-path` and `--key-path` override its two
 output paths. `--replace-credentials` is permitted only with `--enroll` and is

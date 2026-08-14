@@ -9,3 +9,4 @@ Copyright (c) 2026 Atellagent, Inc. All rights reserved. See [LICENSE.md](http:/
   `2026-07-28` peers.
 - Added the connected runtime for CPython 3.11.
 - Added certificate rotation and recovery enrollment support.
+- Added an artifact-first, digest-pinned portable client image release contract.

@@ -1,14 +1,12 @@
-.git
-.github
-.pytest_cache
-.mypy_cache
-__pycache__
-*.py[cod]
-build
-dist
-*.egg-info
-tests
-*.md
-!README.md
+# The Dockerfile consumes a release artifact, never this checkout. Docker
+# always receives this ignore file and the selected Dockerfile as build metadata;
+# every other included file below is deliberate runtime input.
+**
+!docker/
+!docker/Dockerfile
+!dist/
+!dist/atellagent-client.whl
+!requirements/
+!requirements/container-core-py311.lock
 !LICENSE.md
 !THIRD_PARTY_NOTICES.md
