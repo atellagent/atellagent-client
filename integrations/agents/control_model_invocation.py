@@ -10,15 +10,21 @@ import time
 from typing import Any, Dict, List, Optional
 
 from atellagent_client.protocol.api import build_versioned_route
-from atellagent_client.protocol.agent_contracts import ExternalIdentityEvidence
+from atellagent_client.protocol.agent_contracts import (
+    ExternalIdentityEvidence,
+    ModelDecision,
+    ModelDecisionRequest,
+)
 from atellagent_client.sdk.client import reset_workflow_context, set_workflow_context
 from atellagent_client.sdk.operations_modules.invocation_errors import (
     raise_forbidden_invocation_error,
 )
+from atellagent_client.sdk.errors import PolicyTransportError, PolicyViolationError
 
 from .identity_mode import FEDERATED_AGENT_IDENTITY
 
 _MODEL_INVOCATIONS_PATH = "/model-invocations"
+_MODEL_DECISIONS_PATH = "/model-decisions"
 
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
@@ -108,6 +114,117 @@ async def resolve_model_workflow_context_async(
             "provide federated identity or workflow_context with bound principal fields"
         )
     return resolved
+
+
+def resolve_model_decision_context_sync(
+    governance: Any,
+    *,
+    workflow_context: Optional[Dict[str, Any]],
+    identity: Optional[ExternalIdentityEvidence],
+) -> Dict[str, Any]:
+    """Resolve only portable identity facts needed for a decision request."""
+    explicit_context = _coerce_dict(workflow_context)
+    if governance.identity_mode != FEDERATED_AGENT_IDENTITY:
+        return governance._merge_context(explicit_context=explicit_context)
+    if governance._has_bound_principal_context(explicit_context):
+        return governance._merge_context(explicit_context=explicit_context)
+    evidence = identity or ExternalIdentityEvidence()
+    if not evidence.bearer_token:
+        raise RuntimeError("federated model decisions require trusted identity evidence")
+    bootstrap = governance.bootstrap_sync(evidence)
+    return governance._merge_context(
+        explicit_context=explicit_context,
+        principal_context=bootstrap.principal_context,
+    )
+
+
+async def resolve_model_decision_context_async(
+    governance: Any,
+    *,
+    workflow_context: Optional[Dict[str, Any]],
+    identity: Optional[ExternalIdentityEvidence],
+) -> Dict[str, Any]:
+    explicit_context = _coerce_dict(workflow_context)
+    if governance.identity_mode != FEDERATED_AGENT_IDENTITY:
+        return governance._merge_context(explicit_context=explicit_context)
+    if governance._has_bound_principal_context(explicit_context):
+        return governance._merge_context(explicit_context=explicit_context)
+    evidence = identity or ExternalIdentityEvidence()
+    if not evidence.bearer_token:
+        raise RuntimeError("federated model decisions require trusted identity evidence")
+    bootstrap = await governance.bootstrap_async(evidence)
+    return governance._merge_context(
+        explicit_context=explicit_context,
+        principal_context=bootstrap.principal_context,
+    )
+
+
+def model_decision_sync(
+    governance: Any,
+    *,
+    request: ModelDecisionRequest,
+    workflow_context: Optional[Dict[str, Any]] = None,
+    identity: Optional[ExternalIdentityEvidence] = None,
+) -> ModelDecision:
+    context = resolve_model_decision_context_sync(
+        governance, workflow_context=workflow_context, identity=identity
+    )
+    client, headers = governance._sync_headers(context)
+    try:
+        response = client.post(
+            f"{governance.gateway_session.base_url}"
+            f"{build_versioned_route(governance.config.api_version, _MODEL_DECISIONS_PATH)}",
+            json=request.to_payload(),
+            headers=headers,
+        )
+    except Exception as exc:
+        raise PolicyTransportError("model decision transport unavailable") from exc
+    payload = response.json() if response.content else {}
+    if response.status_code != 200:
+        try:
+            governance._raise_gateway_error(response.status_code, payload)
+        except PolicyViolationError:
+            raise
+        except Exception as exc:
+            raise PolicyTransportError("model decision transport failed") from exc
+    try:
+        return ModelDecision.from_payload(payload)
+    except ValueError as exc:
+        raise PolicyTransportError("model decision response was invalid") from exc
+
+
+async def model_decision_async(
+    governance: Any,
+    *,
+    request: ModelDecisionRequest,
+    workflow_context: Optional[Dict[str, Any]] = None,
+    identity: Optional[ExternalIdentityEvidence] = None,
+) -> ModelDecision:
+    context = await resolve_model_decision_context_async(
+        governance, workflow_context=workflow_context, identity=identity
+    )
+    session, headers = await governance._async_headers(context)
+    try:
+        response = await session.post(
+            f"{governance.gateway_session.base_url}"
+            f"{build_versioned_route(governance.config.api_version, _MODEL_DECISIONS_PATH)}",
+            json=request.to_payload(),
+            headers=headers,
+        )
+    except Exception as exc:
+        raise PolicyTransportError("model decision transport unavailable") from exc
+    payload = response.json() if response.content else {}
+    if response.status_code != 200:
+        try:
+            governance._raise_gateway_error(response.status_code, payload)
+        except PolicyViolationError:
+            raise
+        except Exception as exc:
+            raise PolicyTransportError("model decision transport failed") from exc
+    try:
+        return ModelDecision.from_payload(payload)
+    except ValueError as exc:
+        raise PolicyTransportError("model decision response was invalid") from exc
 
 
 def build_model_invocation_payload(
@@ -336,6 +453,10 @@ __all__ = [
     "governed_model_call_sync",
     "invoke_model_async",
     "invoke_model_sync",
+    "model_decision_async",
+    "model_decision_sync",
+    "resolve_model_decision_context_async",
+    "resolve_model_decision_context_sync",
     "resolve_model_workflow_context_async",
     "resolve_model_workflow_context_sync",
 ]

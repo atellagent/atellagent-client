@@ -23,7 +23,7 @@ from .tls import (
 class TelemetryEvent:
     integration_type: str  # 'agent' | 'mcp'
     service_account_id: Optional[str] = (
-        None  # preferred; maps to service_accounts.id (from backend bundle)
+        None  # preferred; immutable identifier supplied in the provisioned bundle
     )
     auth_client_id: Optional[str] = None  # machine auth binding
     agent_deployment_id: Optional[str] = None

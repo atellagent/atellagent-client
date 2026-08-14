@@ -88,6 +88,11 @@ def preflight_sync(governance: Any, context: GovernanceCallContext) -> Governanc
     principal_context: Dict[str, Any] = {}
     identity_forward: Optional[ExternalIdentityEvidence] = None
     if governance.identity_mode == FEDERATED_AGENT_IDENTITY:
+        if not context.identity.bearer_token:
+            raise PolicyViolationError(
+                "Federated tool governance requires trusted identity evidence",
+                "federated_identity_required",
+            )
         bootstrap = governance.bootstrap_sync(context.identity)
         principal_context = bootstrap.principal_context
     elif context.identity.bearer_token or context.identity.identity_provider:
@@ -123,6 +128,11 @@ async def preflight_async(governance: Any, context: GovernanceCallContext) -> Go
     principal_context: Dict[str, Any] = {}
     identity_forward: Optional[ExternalIdentityEvidence] = None
     if governance.identity_mode == FEDERATED_AGENT_IDENTITY:
+        if not context.identity.bearer_token:
+            raise PolicyViolationError(
+                "Federated tool governance requires trusted identity evidence",
+                "federated_identity_required",
+            )
         bootstrap = await governance.bootstrap_async(context.identity)
         principal_context = bootstrap.principal_context
     elif context.identity.bearer_token or context.identity.identity_provider:
@@ -239,6 +249,14 @@ def execute_sync(
                 "action_key": effective_receipt.action_key,
             },
         )
+    governance.action_gate.enforce_sync(
+        action=context.tool_name,
+        integration_type=str(governance.config.integration_type),
+        correlation_id=effective_receipt.action_key,
+        encoded_directive=effective_receipt.control_directive,
+        facts=context.arguments,
+        workflow_context=effective_receipt.workflow_context,
+    )
     token = set_workflow_context(effective_receipt.workflow_context)
     try:
         result = callback()
@@ -288,6 +306,14 @@ async def execute_async(
                 "action_key": effective_receipt.action_key,
             },
         )
+    await governance.action_gate.enforce(
+        action=context.tool_name,
+        integration_type=str(governance.config.integration_type),
+        correlation_id=effective_receipt.action_key,
+        encoded_directive=effective_receipt.control_directive,
+        facts=context.arguments,
+        workflow_context=effective_receipt.workflow_context,
+    )
     token = set_workflow_context(effective_receipt.workflow_context)
     try:
         result = callback()

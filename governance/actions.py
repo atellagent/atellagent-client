@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import inspect
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
@@ -49,6 +50,10 @@ class RuntimeActionGate:
     @classmethod
     def from_config_path(cls, config_path: str) -> "RuntimeActionGate":
         config = load_service_account_config_from_yaml(config_path)
+        return cls.from_config(config)
+
+    @classmethod
+    def from_config(cls, config: Any) -> "RuntimeActionGate":
         if config.control_source == "local_manifest":
             return cls.from_local_manifest(
                 str(config.local_guardrail_manifest_path),
@@ -58,6 +63,15 @@ class RuntimeActionGate:
             source="cluster_directive",
             directive_verifier=GatewayDirectiveVerifier(config),
         )
+
+    def enforce_sync(self, **kwargs: Any) -> None:
+        """Synchronous form for a synchronous host callback boundary."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self.enforce(**kwargs))
+            return
+        raise ActionDenied("control_sync_called_from_running_loop")
 
     @classmethod
     def from_local_manifest(

@@ -102,6 +102,7 @@ class CertificateEnrollmentTests(unittest.IsolatedAsyncioTestCase):
                         datetime.now(timezone.utc) + timedelta(minutes=15)
                     ).isoformat(),
                     "integration_type": "agent",
+                    "identity_mode": "boundary_identity_only",
                     "deployment": {"type": "sdk"},
                 }
             ),
@@ -302,6 +303,7 @@ class CertificateEnrollmentTests(unittest.IsolatedAsyncioTestCase):
         data.update(
             {
                 "integration_type": "mcp",
+                "identity_mode": "boundary_identity_only",
                 "packaging": "bridge",
                 "deployment": {
                     "type": "bridge",

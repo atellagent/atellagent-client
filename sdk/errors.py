@@ -23,3 +23,9 @@ class AuthenticationError(Exception):
     """Exception raised when authentication fails"""
 
     pass
+
+
+class PolicyTransportError(RuntimeError):
+    """A required remote policy decision could not be obtained or parsed."""
+
+    pass

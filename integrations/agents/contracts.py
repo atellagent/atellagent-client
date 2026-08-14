@@ -416,12 +416,25 @@ def receipt_from_preflight_response(
         principal_context=principal_context,
     )
     decision = coerce_dict(response_payload.get("decision"))
+    obligations = decision.get("obligations")
     return GovernanceReceipt(
         action_key=str(response_payload.get("action_key") or ""),
         allowed=bool(decision.get("allowed", False)),
         workflow_context=effective_context,
         outcome=normalize_optional_text(decision.get("outcome")),
         reason=normalize_optional_text(decision.get("reason")),
+        decision_id=normalize_optional_text(decision.get("decision_id")),
+        coverage=normalize_optional_text(decision.get("coverage")),
+        obligations=tuple(
+            coerce_dict(item) for item in (obligations or []) if isinstance(item, dict)
+        ),
+        control_directive=normalize_optional_text(
+            response_payload.get("control_directive")
+        ),
+        directive_expires_at=normalize_optional_text(
+            response_payload.get("control_directive_expires_at")
+            or response_payload.get("directive_expires_at")
+        ),
     )
 
 

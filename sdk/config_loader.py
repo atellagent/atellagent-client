@@ -26,7 +26,7 @@ def load_service_account_config_from_yaml(path: str) -> ServiceAccountConfig:
       certificate_enrollment_expires_at,
       integration_id, placement, protocol_version,
       capabilities, packaging,
-      control_source, local_guardrail_manifest_path, local_guardrail_mode,
+      control_source, identity_mode, local_guardrail_manifest_path, local_guardrail_mode,
       connected runtime path templates, integration_name, integration_type,
       integration_category, channel,
       deployment, timeout,
@@ -78,6 +78,7 @@ def load_service_account_config_from_yaml(path: str) -> ServiceAccountConfig:
         "api_version",
         "contract_version",
         "control_source",
+        "identity_mode",
         "local_guardrail_manifest_path",
         "local_guardrail_mode",
         "timeout",
@@ -116,6 +117,9 @@ def load_service_account_config_from_yaml(path: str) -> ServiceAccountConfig:
     control_source = _env_override(
         data.get("control_source"), "ATELLAGENT_CONTROL_SOURCE"
     ) or "cluster_directive"
+    # Identity mode is an enrolled-boundary property.  It is intentionally not
+    # environment-overridable: local configuration must not change authority.
+    identity_mode = data.get("identity_mode")
     local_guardrail_manifest_path = _env_override(
         data.get("local_guardrail_manifest_path"),
         "ATELLAGENT_LOCAL_GUARDRAIL_MANIFEST",
@@ -247,6 +251,7 @@ def load_service_account_config_from_yaml(path: str) -> ServiceAccountConfig:
         api_version=api_version,
         contract_version=contract_version,
         control_source=control_source,
+        identity_mode=identity_mode,
         local_guardrail_manifest_path=local_guardrail_manifest_path,
         local_guardrail_mode=local_guardrail_mode,
         cert_path=cert_path,

@@ -80,11 +80,7 @@ def get_identity_mode_semantics(
 def resolve_identity_mode_from_config(
     config: ServiceAccountConfig,
 ) -> ExternalAgentIdentityMode:
-    # Runtime-local deployment configuration is never identity authority. A
-    # caller that operates in federated mode must receive that typed decision
-    # from its provisioned control-plane contract and pass it explicitly.
-    del config
-    return BOUNDARY_IDENTITY_ONLY
+    return normalize_identity_mode(config.identity_mode)
 
 
 __all__ = [

@@ -111,6 +111,7 @@ class ServiceAccountConfig:
     api_version: str = DEFAULT_API_VERSION
     contract_version: str = DEFAULT_CONTRACT_VERSION
     control_source: str = "cluster_directive"
+    identity_mode: Optional[str] = None
     local_guardrail_manifest_path: Optional[str] = None
     local_guardrail_mode: Optional[str] = None
     cert_path: Optional[str] = None
@@ -211,6 +212,18 @@ class ServiceAccountConfig:
             raise ValueError(
                 "local guardrail settings are valid only with control_source=local_manifest"
             )
+        normalized_identity_mode = str(self.identity_mode or "").strip().lower() or None
+        if self.integration_type in {"agent", "mcp"}:
+            if normalized_identity_mode not in {
+                "boundary_identity_only",
+                "federated_agent_identity",
+            }:
+                raise ValueError(
+                    "identity_mode is required for connected agent and MCP service accounts"
+                )
+        elif normalized_identity_mode is not None:
+            raise ValueError("identity_mode is valid only for connected agent and MCP service accounts")
+        self.identity_mode = normalized_identity_mode
 
     @property
     def auth_client_id(self) -> str:

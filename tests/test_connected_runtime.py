@@ -106,6 +106,9 @@ def _config(
         cert_path="/tmp/client.crt",
         key_path="/tmp/client.key",
         integration_type=integration_type,
+        identity_mode=(
+            "boundary_identity_only" if integration_type in {"agent", "mcp"} else None
+        ),
         deployment=(
             BridgeDeploymentConfig()
             if packaging == "bridge"

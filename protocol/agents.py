@@ -9,6 +9,8 @@ from .agent_contracts import (
     GovernanceCallContext,
     GovernanceReceipt,
     GuardrailDecision,
+    ModelDecision,
+    ModelDecisionRequest,
     ToolCallRequest,
     ToolCallResult,
 )
@@ -41,6 +43,8 @@ __all__ = [
     "GovernanceCallContext",
     "GovernanceReceipt",
     "GuardrailDecision",
+    "ModelDecision",
+    "ModelDecisionRequest",
     "INGRESS_ENVELOPE_SCHEMA_VERSION",
     "IDENTITY_CONTEXT_KEY",
     "RuntimeIngressEnvelope",

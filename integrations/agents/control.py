@@ -20,6 +20,8 @@ from atellagent_client.protocol.agent_contracts import (
     GovernanceCallContext,
     GovernanceReceipt,
     GuardrailDecision,
+    ModelDecision,
+    ModelDecisionRequest,
 )
 from atellagent_client.protocol.context import (
     apply_workflow_headers,
@@ -31,14 +33,13 @@ from atellagent_client.sdk.client_modules.runtime_authority import (
     apply_runtime_authority_headers,
 )
 from atellagent_client.sdk.errors import AuthenticationError, PolicyViolationError
+from atellagent_client.governance import RuntimeActionGate
 from atellagent_client.sdk.operations_modules.common import extract_policy_detail
 
 from . import control_actions as actions
 from . import control_model_invocation as chat
 from .contracts import BoundaryBootstrapResponse, extract_contract_workflow_context
 from .identity_mode import (
-    ExternalAgentIdentityMode,
-    normalize_identity_mode,
     resolve_identity_mode_from_config,
 )
 
@@ -47,24 +48,19 @@ class ExternalAgentGovernance:
     def __init__(
         self,
         config: ServiceAccountConfig,
-        *,
-        identity_mode: Optional[ExternalAgentIdentityMode] = None,
     ) -> None:
         self.config = config
         self.gateway_session = GatewaySession.from_service_account_config(config)
-        self.identity_mode = normalize_identity_mode(
-            identity_mode or resolve_identity_mode_from_config(config)
-        )
+        self.identity_mode = resolve_identity_mode_from_config(config)
+        self.action_gate = RuntimeActionGate.from_config(config)
 
     @classmethod
     def from_config_path(
         cls,
         config_path: str,
-        *,
-        identity_mode: Optional[ExternalAgentIdentityMode] = None,
     ) -> "ExternalAgentGovernance":
         config = load_service_account_config_from_yaml(config_path)
-        return cls(config, identity_mode=identity_mode)
+        return cls(config)
 
     def _merge_context(
         self,
@@ -352,6 +348,34 @@ class ExternalAgentGovernance:
             **kwargs,
         )
 
+    def model_decision_sync(
+        self,
+        request: ModelDecisionRequest,
+        *,
+        workflow_context: Optional[Dict[str, Any]] = None,
+        identity: Optional[ExternalIdentityEvidence] = None,
+    ) -> ModelDecision:
+        return chat.model_decision_sync(
+            self,
+            request=request,
+            workflow_context=workflow_context,
+            identity=identity,
+        )
+
+    async def model_decision_async(
+        self,
+        request: ModelDecisionRequest,
+        *,
+        workflow_context: Optional[Dict[str, Any]] = None,
+        identity: Optional[ExternalIdentityEvidence] = None,
+    ) -> ModelDecision:
+        return await chat.model_decision_async(
+            self,
+            request=request,
+            workflow_context=workflow_context,
+            identity=identity,
+        )
+
     def close(self) -> None:
         self.gateway_session.close_sync()
 
@@ -365,4 +389,6 @@ __all__ = [
     "GovernanceCallContext",
     "GovernanceReceipt",
     "GuardrailDecision",
+    "ModelDecision",
+    "ModelDecisionRequest",
 ]

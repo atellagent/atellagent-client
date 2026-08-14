@@ -19,6 +19,8 @@ from .agents import (
     GovernanceCallContext,
     GovernanceReceipt,
     GuardrailDecision,
+    ModelDecision,
+    ModelDecisionRequest,
     RuntimeIngressEnvelope,
     ToolCallRequest,
 )
@@ -47,6 +49,8 @@ __all__ = [
     "GovernanceCallContext",
     "GovernanceReceipt",
     "GuardrailDecision",
+    "ModelDecision",
+    "ModelDecisionRequest",
     "RuntimeIngressEnvelope",
     "ToolCallRequest",
     "apply_workflow_headers",
