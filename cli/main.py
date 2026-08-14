@@ -14,6 +14,7 @@ import inspect
 import json
 import logging
 import os
+import signal
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -47,6 +48,25 @@ from atellagent_client.sdk.enrollment import (
 def _die(message: str) -> None:
     print(f"[ERROR] {message}", file=sys.stderr)
     raise SystemExit(1)
+
+
+async def _wait_for_shutdown_signal() -> None:
+    """Wait for a process termination signal without bypassing runtime cleanup."""
+    stopped = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    registered: list[signal.Signals] = []
+    for termination_signal in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(termination_signal, stopped.set)
+        except (NotImplementedError, RuntimeError):
+            continue
+        registered.append(termination_signal)
+    try:
+        await stopped.wait()
+    finally:
+        for termination_signal in registered:
+            with suppress(NotImplementedError, RuntimeError):
+                loop.remove_signal_handler(termination_signal)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -242,7 +262,7 @@ async def _run(args: argparse.Namespace) -> None:
         await participant.start()
         print(f"Connected participant registered: {participant.instance_id}")
         if not args.verify:
-            await participant.run_forever()
+            await _wait_for_shutdown_signal()
     finally:
         await participant.stop()
         if local_mcp is not None:
@@ -259,7 +279,7 @@ async def _run_hook_control(args: argparse.Namespace) -> None:
         await runtime.start()
         print(f"Hook-control service listening on: {runtime.socket_path}")
         if not args.verify:
-            await runtime.run_forever()
+            await _wait_for_shutdown_signal()
     finally:
         await runtime.stop()
 
