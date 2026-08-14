@@ -132,6 +132,7 @@ PUBLIC_SOURCE_PATHS = (
     "docs/README.md",
     "docs/hosts/claude-code.md",
     "docs/hosts/claude-code-route-mode.md",
+    "docs/hosts/codex-route-mode.md",
     "docs/hosts/claude-cowork.md",
     "docs/hosts/codex.md",
     "docs/hosts/gemini-cli.md",
@@ -179,6 +180,7 @@ PUBLIC_SOURCE_PATHS = (
     "integrations/agents/__init__.py",
     "integrations/agents/README.md",
     "integrations/agents/anthropic_facade.py",
+    "integrations/agents/openai_facade.py",
     "integrations/agents/boundary_contract.py",
     "integrations/agents/capabilities.py",
     "integrations/agents/contracts.py",
@@ -292,6 +294,7 @@ PUBLIC_SOURCE_PATHS = (
     "tests/test_connected_runtime.py",
     "tests/test_agent_identity_contract.py",
     "tests/test_anthropic_facade.py",
+    "tests/test_openai_facade.py",
     "tests/test_mcp_proxy.py",
     "tests/fixtures/modern_mcp_reference_server.py",
 )
@@ -421,6 +424,7 @@ setup(
             "atellagent-tool-proxy=atellagent_client.proxy.cli:tool_main",
             "atellagent-hook-adapter=atellagent_client.integrations.agents.host_hooks:main",
             "atellagent-anthropic-facade=atellagent_client.integrations.agents.anthropic_facade:main",
+            "atellagent-openai-facade=atellagent_client.integrations.agents.openai_facade:main",
         ],
     },
     extras_require={

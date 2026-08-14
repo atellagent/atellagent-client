@@ -39,6 +39,7 @@ class DocumentationContractTests(unittest.TestCase):
             "integrations/workflows/README.md",
             "docs/hosts/claude-code.md",
             "docs/hosts/claude-code-route-mode.md",
+            "docs/hosts/codex-route-mode.md",
             "docs/hosts/codex.md",
             "docs/hosts/gemini-cli.md",
             "docs/hosts/claude-cowork.md",
@@ -57,6 +58,7 @@ class DocumentationContractTests(unittest.TestCase):
             "../docker/README.md",
             "hosts/claude-code.md",
             "hosts/claude-code-route-mode.md",
+            "hosts/codex-route-mode.md",
             "hosts/codex.md",
             "hosts/gemini-cli.md",
             "hosts/claude-cowork.md",
@@ -101,6 +103,9 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("`full_model_request`", route)
         self.assertIn("`stream: true`", route)
         self.assertIn("not preserved", route.lower())
+        responses = self.docs["docs/hosts/codex-route-mode.md"]
+        self.assertIn("`stream: true`", responses)
+        self.assertIn("not a codex", responses.lower())
 
     def test_public_guide_links_resolve(self) -> None:
         for relative_path, text in self.docs.items():
@@ -131,6 +136,7 @@ class DocumentationContractTests(unittest.TestCase):
             "atellagent_client.integrations.agents": (
                 "AnthropicMessagesFacadeRuntime",
                 "HookControlRuntime",
+                "OpenAIResponsesFacadeRuntime",
                 "host_hook_capabilities",
             ),
             "atellagent_client.integrations.providers": ("GovernedProviderSession", "ModelGovernanceMode"),

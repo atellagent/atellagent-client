@@ -32,6 +32,11 @@ from .anthropic_facade import (
     AnthropicMessagesFacadeRuntime,
     load_route_facade_capability_token,
 )
+from .openai_facade import (
+    OpenAIResponsesFacadeError,
+    OpenAIResponsesFacadeResponse,
+    OpenAIResponsesFacadeRuntime,
+)
 
 __all__ = [
     "BoundaryExecutionMetadata",
@@ -44,6 +49,9 @@ __all__ = [
     "HookControlClient",
     "HookControlError",
     "HookControlRuntime",
+    "OpenAIResponsesFacadeError",
+    "OpenAIResponsesFacadeResponse",
+    "OpenAIResponsesFacadeRuntime",
     "HookAdapterResponse",
     "ProviderCapabilitySet",
     "RuntimeWaitCapabilitySet",
