@@ -96,9 +96,15 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("PostToolUseFailure", claude)
         self.assertNotIn("PostToolUseFailure", codex)
         self.assertIn("does not claim Claude Cowork coverage", claude)
-        for page in ("docs/hosts/gemini-cli.md", "docs/hosts/claude-cowork.md"):
-            self.assertIn("deferred", self.docs[page].lower())
-            self.assertIn("does not", self.docs[page].lower())
+        gemini = self.docs["docs/hosts/gemini-cli.md"]
+        self.assertIn("`BeforeModel`", gemini)
+        self.assertIn("`BeforeTool`", gemini)
+        self.assertIn("`AfterModel`", gemini)
+        self.assertIn("Not supported", gemini)
+        self.assertNotIn("deferred", gemini.lower())
+        cowork = self.docs["docs/hosts/claude-cowork.md"]
+        self.assertIn("deferred", cowork.lower())
+        self.assertIn("does not", cowork.lower())
         route = self.docs["docs/hosts/claude-code-route-mode.md"]
         self.assertIn("`full_model_request`", route)
         self.assertIn("`stream: true`", route)

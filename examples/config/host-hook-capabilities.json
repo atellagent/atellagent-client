@@ -11,6 +11,11 @@
       "transport": "command",
       "events": {"UserPromptSubmit": "turn_entry", "PreToolUse": "preflight", "PostToolUse": "postflight_success"},
       "exclusions": ["mcp__atellagent__* (effect-boundary MCP PEP)", "hosted or specialized tool paths outside documented command hooks"]
+    },
+    "gemini-cli": {
+      "transport": "command",
+      "events": {"BeforeModel": "turn_entry", "BeforeTool": "preflight"},
+      "exclusions": ["AfterModel (not supported)", "tool outcomes without a stable host tool-call identifier"]
     }
   }
 }

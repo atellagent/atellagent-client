@@ -36,7 +36,7 @@ The complete public coverage declaration is available from
 
 Read the host-specific coverage matrices before deployment:
 [Claude Code](hosts/claude-code.md), [Codex](hosts/codex.md),
-[Gemini CLI (deferred)](hosts/gemini-cli.md), and
+[Gemini CLI](hosts/gemini-cli.md), and
 [Claude Cowork (deferred)](hosts/claude-cowork.md).
 
 ## Claude Code
@@ -72,6 +72,14 @@ Codex's managed configuration layers, inline `[hooks]` syntax, and
 `allow_managed_hooks_only` setting are documented by OpenAI. Host hooks are an
 additional enforcement point, not a replacement for host permissions or a
 claim that a disabled host hook is enforced.
+
+## Gemini CLI
+
+Add `examples/config/gemini-cli-hooks.user.json` to trusted Gemini CLI
+settings, replacing `<uid>` with the runtime user's numeric UID. The template
+governs `BeforeModel` and `BeforeTool` synchronously. It does not configure
+`AfterModel`, rewrite requests or responses, or claim tool-outcome recording
+where Gemini does not provide a stable tool-call identifier for correlation.
 
 ## Diagnostics and failures
 

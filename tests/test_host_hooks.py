@@ -129,6 +129,36 @@ class HostHookAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls[-1][0], "action.postflight")
         self.assertTrue(self.calls[-1][1]["success"])
 
+    async def test_gemini_before_model_and_before_tool_golden(self) -> None:
+        model = {
+            "hook_event_name": "BeforeModel",
+            "session_id": "session-1",
+            "timestamp": "2026-08-14T23:15:00Z",
+            "llm_request": {"messages": [{"role": "user", "content": "inspect this repository"}]},
+        }
+        allowed = await self._handle("gemini-cli", model)
+        self.assertEqual(allowed.exit_code, 0)
+        self.assertEqual(allowed.stdout, "")
+        method, params = self.calls[-1]
+        self.assertEqual(method, "model.decision")
+        self.assertEqual(params["host"], "gemini_cli")
+        self.assertEqual(params["messages"], model["llm_request"]["messages"])
+
+        tool = {
+            "hook_event_name": "BeforeTool",
+            "session_id": "session-1",
+            "timestamp": "2026-08-14T23:15:01Z",
+            "tool_name": "read_file",
+            "tool_input": {"path": "/tmp/example.txt"},
+        }
+        self.result = {"allowed": False}
+        denied = await self._handle("gemini-cli", tool)
+        self.assertEqual(denied.exit_code, 0)
+        self.assertEqual(json.loads(denied.stdout)["decision"], "deny")
+        method, params = self.calls[-1]
+        self.assertEqual(method, "action.preflight")
+        self.assertFalse(params["postflight_required"])
+
     async def test_timeout_daemon_failure_and_malformed_input_fail_closed(self) -> None:
         event = {"hook_event_name": "PreToolUse", "session_id": "s", "tool_use_id": "t", "tool_name": "Bash", "tool_input": {}}
         self.failure = asyncio.TimeoutError()

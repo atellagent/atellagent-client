@@ -1,12 +1,17 @@
-# Gemini CLI capability — deferred
+# Gemini CLI coverage
 
-Gemini CLI exposes command-hook checkpoints including `BeforeModel` and
-`BeforeTool`. Its public hook reference also exposes `AfterModel`, but
-Atellagent does not implement an `AfterModel` response checkpoint, response
-rewriting, or response redaction in this plan.
+Atellagent supports Gemini CLI through synchronous local command hooks and an
+enrolled local hook-control service. Use
+`examples/config/gemini-cli-hooks.user.json` with the common
+[host-hook guide](../HOST_HOOKS.md).
 
-No Atellagent Gemini CLI adapter, installation template, identity binding, or
-coverage claim is currently provided. Do not infer that a generic local hook
-control configuration works with Gemini CLI. A future implementation requires a
-separate host-contract review, explicit service-account boundary design, and
-coverage tests before it can be documented as supported.
+| Checkpoint | Coverage | Result |
+| --- | --- | --- |
+| `BeforeModel` | Hook-visible `llm_request.messages` | A denial blocks the LLM request before dispatch. |
+| `BeforeTool` | Hook-visible tool name and object arguments | A denial prevents tool execution. |
+| `AfterModel` | Not supported | No response inspection, rewriting, or redaction. |
+| Tool outcome | Not supported | No stable host tool-call identifier for correlated postflight. |
+| Subscription preservation | Yes | Decision mode leaves Gemini CLI's native provider transport in place. |
+
+The adapter uses the enrolled Atellagent identity only; it receives no provider
+credentials and does not alter Gemini model requests or responses.

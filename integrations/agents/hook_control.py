@@ -341,13 +341,19 @@ class HookControlRuntime:
         params = _object(
             raw_params,
             "params",
-            allowed={"host", "session_id", "turn_id", "tool_call_id", "tool_name", "arguments"},
+            allowed={
+                "host", "session_id", "turn_id", "tool_call_id", "tool_name", "arguments",
+                "postflight_required",
+            },
         )
         fields = self._turn_fields(params, include_tool=True)
         tool_name = _identifier(params.get("tool_name"), "tool_name")
         arguments = params.get("arguments")
         if not isinstance(arguments, Mapping):
             raise HookControlError("invalid_arguments")
+        postflight_required = params.get("postflight_required", True)
+        if not isinstance(postflight_required, bool):
+            raise HookControlError("invalid_postflight_required")
         pending_key = self._pending_key(**fields)
         async with self._pending_lock:
             if pending_key in self._pending or pending_key in self._reserving:
@@ -408,7 +414,8 @@ class HookControlRuntime:
                 raise
             async with self._pending_lock:
                 self._reserving.discard(pending_key)
-                self._pending[pending_key] = _PendingAction(context=context, receipt=receipt)
+                if postflight_required:
+                    self._pending[pending_key] = _PendingAction(context=context, receipt=receipt)
         except PolicyViolationError as exc:
             async with self._pending_lock:
                 self._reserving.discard(pending_key)

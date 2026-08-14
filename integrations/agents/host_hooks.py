@@ -29,7 +29,7 @@ INTERNAL_DEADLINE_SECONDS = 7.0
 _DENIED_REASON = "Atellagent policy denied this request."
 _UNAVAILABLE_REASON = "Atellagent control is unavailable; request denied."
 _MAX_STDIN_BYTES = 64 * 1024
-_HOST_NAMES = {"claude-code", "codex"}
+_HOST_NAMES = {"claude-code", "codex", "gemini-cli"}
 _ATELLAGENT_MCP_PREFIX = "mcp__atellagent__"
 
 
@@ -68,6 +68,17 @@ def host_hook_capabilities() -> dict[str, Any]:
                 "exclusions": [
                     "mcp__atellagent__* (effect-boundary MCP PEP)",
                     "hosted or specialized tool paths outside documented command hooks",
+                ],
+            },
+            "gemini-cli": {
+                "transport": "command",
+                "events": {
+                    "BeforeModel": "turn_entry",
+                    "BeforeTool": "preflight",
+                },
+                "exclusions": [
+                    "AfterModel (not supported)",
+                    "tool outcomes without a stable host tool-call identifier",
                 ],
             },
         },
@@ -144,6 +155,13 @@ def _prompt_result(host: str, allowed: bool) -> HookAdapterResponse:
 
 
 def _pretool_result(host: str, allowed: bool) -> HookAdapterResponse:
+    if host == "gemini-cli":
+        if allowed:
+            return HookAdapterResponse(exit_code=0)
+        return HookAdapterResponse(
+            exit_code=0,
+            stdout=_json({"decision": "deny", "reason": _DENIED_REASON}),
+        )
     # Both supported host command-hook schemas use this documented shape.
     output: dict[str, Any] = {
         "hookEventName": "PreToolUse",
@@ -155,6 +173,64 @@ def _pretool_result(host: str, allowed: bool) -> HookAdapterResponse:
         exit_code=0,
         stdout=_json({"hookSpecificOutput": output}),
     )
+
+
+def _gemini_turn_id(event: Mapping[str, Any], *, fallback: str) -> str:
+    timestamp = _string(event, "timestamp")
+    material = f"gemini-cli:{_string(event, 'session_id')}:{timestamp}:{fallback}".encode("utf-8")
+    return f"hook-{sha256(material).hexdigest()}"
+
+
+async def _handle_gemini_before_model(
+    socket_path: str, event: Mapping[str, Any]
+) -> HookAdapterResponse:
+    _event(event, ("BeforeModel",))
+    request = event.get("llm_request")
+    if not isinstance(request, Mapping) or not isinstance(request.get("messages"), list):
+        raise ValueError("invalid hook input")
+    session_id = _string(event, "session_id")
+    messages = list(request["messages"])
+    turn_id = _gemini_turn_id(event, fallback=json.dumps(messages, sort_keys=True, separators=(",", ":")))
+    result = await _call(
+        socket_path,
+        "model.decision",
+        {
+            "host": "gemini_cli",
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "messages": messages,
+        },
+    )
+    return _prompt_result("gemini-cli", _allowed(result))
+
+
+async def _handle_gemini_before_tool(
+    socket_path: str, event: Mapping[str, Any]
+) -> HookAdapterResponse:
+    _event(event, ("BeforeTool",))
+    session_id = _string(event, "session_id")
+    tool_name = _string(event, "tool_name")
+    arguments = event.get("tool_input")
+    if not isinstance(arguments, Mapping):
+        raise ValueError("invalid hook input")
+    tool_call_id = _gemini_turn_id(
+        event,
+        fallback=f"{tool_name}:{json.dumps(dict(arguments), sort_keys=True, separators=(',', ':'))}",
+    )
+    result = await _call(
+        socket_path,
+        "action.preflight",
+        {
+            "host": "gemini_cli",
+            "session_id": session_id,
+            "turn_id": tool_call_id,
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "arguments": dict(arguments),
+            "postflight_required": False,
+        },
+    )
+    return _pretool_result("gemini-cli", _allowed(result))
 
 
 async def _handle_prompt(host: str, socket_path: str, event: Mapping[str, Any]) -> HookAdapterResponse:
@@ -238,6 +314,12 @@ async def handle_host_hook(
         return _failure()
     try:
         event_name = _string(event, "hook_event_name")
+        if host == "gemini-cli":
+            if event_name == "BeforeModel":
+                return await _handle_gemini_before_model(socket_path, event)
+            if event_name == "BeforeTool":
+                return await _handle_gemini_before_tool(socket_path, event)
+            return _failure()
         if event_name == "UserPromptSubmit":
             return await _handle_prompt(host, socket_path, event)
         if event_name == "PreToolUse":
