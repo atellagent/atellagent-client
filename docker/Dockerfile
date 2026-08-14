@@ -32,7 +32,7 @@ WORKDIR /opt/atellagent
 # The build context is a positive allowlist. It contains one already-built,
 # verified wheel rather than a source checkout; no customer code or credentials
 # are copied into the image.
-COPY dist/atellagent-client.whl /tmp/atellagent-client.whl
+COPY dist/atellagent_client-*.whl /tmp/
 COPY requirements/container-core-py311.lock /tmp/container-core-py311.lock
 COPY LICENSE.md THIRD_PARTY_NOTICES.md /licenses/
 
@@ -40,11 +40,13 @@ RUN test -n "$CLIENT_VERSION" \
     && test -n "$VCS_REF" \
     && test -n "$BUILD_DATE" \
     && test -n "$CLIENT_WHEEL_SHA256" \
-    && test "$CLIENT_WHEEL_SHA256" = "$(sha256sum /tmp/atellagent-client.whl | awk '{print $1}')" \
-    && pip install --no-deps /tmp/atellagent-client.whl \
+    && test "$(find /tmp -maxdepth 1 -type f -name 'atellagent_client-*.whl' | wc -l)" -eq 1 \
+    && wheel=$(find /tmp -maxdepth 1 -type f -name 'atellagent_client-*.whl' -print -quit) \
+    && test "$CLIENT_WHEEL_SHA256" = "$(sha256sum "$wheel" | awk '{print $1}')" \
+    && pip install --no-deps "$wheel" \
     && pip install --only-binary=:all: --require-hashes -r /tmp/container-core-py311.lock \
     && pip check \
-    && rm -rf /tmp/atellagent-client.whl /tmp/container-core-py311.lock /root/.cache
+    && rm -rf "$wheel" /tmp/container-core-py311.lock /root/.cache
 
 # The image contains no listener. Runtime state must be supplied through the
 # documented writable identity/runtime mounts and a tmpfs at /tmp.

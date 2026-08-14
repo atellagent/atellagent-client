@@ -28,7 +28,7 @@ class ContainerReleaseContractTests(unittest.TestCase):
             self.dockerfile,
             r"FROM python:3\.11\.15-slim-bookworm@sha256:[0-9a-f]{64}",
         )
-        self.assertIn("COPY dist/atellagent-client.whl", self.dockerfile)
+        self.assertIn("COPY dist/atellagent_client-*.whl /tmp/", self.dockerfile)
         self.assertIn("COPY requirements/container-core-py311.lock", self.dockerfile)
         self.assertNotIn("COPY . ", self.dockerfile)
         self.assertNotIn("apt-get", self.dockerfile)
@@ -54,7 +54,7 @@ class ContainerReleaseContractTests(unittest.TestCase):
                 "!docker/",
                 "!docker/Dockerfile",
                 "!dist/",
-                "!dist/atellagent-client.whl",
+                "!dist/atellagent_client-*.whl",
                 "!requirements/",
                 "!requirements/container-core-py311.lock",
                 "!LICENSE.md",

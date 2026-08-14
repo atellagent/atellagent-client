@@ -215,7 +215,6 @@ jobs:
           set -euo pipefail
           wheel=$(find dist -maxdepth 1 -name 'atellagent_client-*.whl' -print -quit)
           test "$(sha256sum "$wheel" | awk '{print $1}')" = '${{ needs.public-release-boundary.outputs.wheel_sha256 }}'
-          cp "$wheel" dist/atellagent-client.whl
           docker buildx build --load --platform linux/amd64 --file docker/Dockerfile --tag atellagent-client:inspect \
             --build-arg CLIENT_VERSION='${{ needs.public-release-boundary.outputs.client_version }}' \
             --build-arg VCS_REF='${{ github.sha }}' \
@@ -261,7 +260,6 @@ jobs:
         run: |
           set -euo pipefail
           wheel=$(find dist -maxdepth 1 -name 'atellagent_client-*.whl' -print -quit)
-          cp "$wheel" dist/atellagent-client.whl
           docker buildx build --load --platform '${{ matrix.platform }}' --file docker/Dockerfile --tag atellagent-client:scan \
             --build-arg CLIENT_VERSION='${{ needs.public-release-boundary.outputs.client_version }}' \
             --build-arg VCS_REF='${{ github.sha }}' \
@@ -324,7 +322,6 @@ jobs:
             echo "exact image version already exists: $image:$version" >&2
             exit 1
           fi
-          cp "$wheel" dist/atellagent-client.whl
           major=${version%%.*}
           minor=${version%.*}
           docker buildx build --metadata-file /tmp/build-metadata.json --platform linux/amd64,linux/arm64 --push --provenance=mode=max --sbom=true --file docker/Dockerfile \

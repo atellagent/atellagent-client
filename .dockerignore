@@ -5,7 +5,7 @@
 !docker/
 !docker/Dockerfile
 !dist/
-!dist/atellagent-client.whl
+!dist/atellagent_client-*.whl
 !requirements/
 !requirements/container-core-py311.lock
 !LICENSE.md

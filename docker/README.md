@@ -113,7 +113,10 @@ are not production deployment identifiers.
 The owner-only external-host hook socket is best run natively on a desktop.
 Docker Desktop does not preserve the same user-owned Unix-socket boundary
 between macOS/Windows and Linux containers. A Linux container deployment needs
-a deliberately private runtime socket mount; follow the host-hook guide.
+a deliberately private runtime socket mount. With the image's default runtime
+identity, use `--tmpfs /run/atellagent:rw,noexec,nosuid,size=1m,uid=10001,gid=10001,mode=700`
+in addition to the `/tmp` mount; a default root-owned tmpfs is intentionally
+rejected by hook control.
 
 Before the first publish, protect the `client-release` GitHub environment and
 grant the publisher only that environment's workflow token. The first approved
