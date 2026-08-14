@@ -115,10 +115,11 @@ Docker Desktop does not preserve the same user-owned Unix-socket boundary
 between macOS/Windows and Linux containers. A Linux container deployment needs
 a deliberately private runtime socket mount; follow the host-hook guide.
 
-Before the first publish, protect the `client-release` GitHub environment,
-link the GHCR package to this repository, set public visibility plus
-description/license/source metadata, and grant the publisher only that
-environment's workflow token. The workflow publishes one `linux/amd64` and
-`linux/arm64` manifest, refuses an existing exact version, and attaches
-provenance/SBOM material. It does not mirror to Docker Hub, and no image is
-published by a merge or test run.
+Before the first publish, protect the `client-release` GitHub environment and
+grant the publisher only that environment's workflow token. The first approved
+release creates the GHCR package; its OCI source, license, and description
+labels link it to this repository. Immediately after that release, verify the
+package linkage and set its public visibility and package-page metadata. The
+workflow publishes one `linux/amd64` and `linux/arm64` manifest, refuses an
+existing exact version, and attaches provenance/SBOM material. It does not
+mirror to Docker Hub, and no image is published by a merge or test run.
