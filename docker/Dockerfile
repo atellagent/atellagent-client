@@ -2,8 +2,8 @@
 # Copyright (c) 2026 Atellagent, Inc. All rights reserved.
 # This source code is licensed under the terms found in the LICENSE.md file in the root directory of this source tree.
 
-# `3.11.15-slim-bookworm`, pinned to its multi-platform OCI index on 2026-08-14.
-FROM python:3.11.15-slim-bookworm@sha256:d29f48a31a8b408ed19272ca1e7b10ebae13b240a27e862d3d4217c528e2e0c3
+# `3.11.16-slim-bookworm`, pinned to its multi-platform OCI index on 2026-08-16.
+FROM python:3.11.16-slim-bookworm@sha256:2e32f7d302adc1c37428355c1e646897c0c53f4fd60b6a551245fb90ee129f91
 
 ARG CLIENT_VERSION
 ARG VCS_REF
@@ -46,7 +46,14 @@ RUN test -n "$CLIENT_VERSION" \
     && pip install --no-deps "$wheel" \
     && pip install --only-binary=:all: --require-hashes -r /tmp/container-core-py311.lock \
     && pip check \
-    && rm -rf "$wheel" /tmp/container-core-py311.lock /root/.cache
+    && rm -rf "$wheel" /tmp/container-core-py311.lock /root/.cache \
+    && rm -rf /usr/local/bin/pip* /usr/local/bin/wheel \
+      /usr/local/lib/python3.11/site-packages/pip \
+      /usr/local/lib/python3.11/site-packages/pip-*.dist-info \
+      /usr/local/lib/python3.11/site-packages/setuptools \
+      /usr/local/lib/python3.11/site-packages/setuptools-*.dist-info \
+      /usr/local/lib/python3.11/site-packages/wheel \
+      /usr/local/lib/python3.11/site-packages/wheel-*.dist-info
 
 # The image contains no listener. Runtime state must be supplied through the
 # documented writable identity/runtime mounts and a tmpfs at /tmp.

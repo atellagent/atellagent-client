@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 import re
 import unittest
@@ -21,12 +22,17 @@ class ContainerReleaseContractTests(unittest.TestCase):
         cls.lock = (cls.root / "requirements/container-core-py311.lock").read_text(
             encoding="utf-8"
         )
+        cls.vex = json.loads(
+            (cls.root / "security/vex/python-3.11.16.openvex.json").read_text(
+                encoding="utf-8"
+            )
+        )
 
     def test_artifact_first_dockerfile_is_pinned_and_core_only(self) -> None:
         self.assertFalse((self.root / "docker/Dockerfile.base").exists())
         self.assertRegex(
             self.dockerfile,
-            r"FROM python:3\.11\.15-slim-bookworm@sha256:[0-9a-f]{64}",
+            r"FROM python:3\.11\.16-slim-bookworm@sha256:[0-9a-f]{64}",
         )
         self.assertIn("COPY dist/atellagent_client-*.whl /tmp/", self.dockerfile)
         self.assertIn("COPY requirements/container-core-py311.lock", self.dockerfile)
@@ -35,6 +41,9 @@ class ContainerReleaseContractTests(unittest.TestCase):
         self.assertIn("--require-hashes", self.dockerfile)
         self.assertIn("--only-binary=:all:", self.dockerfile)
         self.assertIn("pip check", self.dockerfile)
+        self.assertIn("site-packages/setuptools", self.dockerfile)
+        self.assertIn("site-packages/pip", self.dockerfile)
+        self.assertIn("site-packages/wheel", self.dockerfile)
         self.assertIn("io.atellagent.client-wheel-sha256", self.dockerfile)
         self.assertNotIn("EXPOSE", self.dockerfile)
         self.assertIn("USER 10001:10001", self.dockerfile)
@@ -87,6 +96,34 @@ class ContainerReleaseContractTests(unittest.TestCase):
         self.assertIn("exact image version already exists", self.workflow)
         self.assertIn("severity-cutoff: high", self.workflow)
         self.assertIn("fail-build: true", self.workflow)
+        self.assertIn("only-fixed: true", self.workflow)
+        self.assertIn("vex: security/vex/python-3.11.16.openvex.json", self.workflow)
+
+    def test_cp31116_vex_is_narrow_and_tracks_the_fixed_component(self) -> None:
+        self.assertEqual(self.vex["@context"], "https://openvex.dev/ns/v0.2.0")
+        self.assertEqual(self.vex["version"], 1)
+        self.assertEqual(
+            {statement["vulnerability"]["name"] for statement in self.vex["statements"]},
+            {
+                "CVE-2026-7210",
+                "CVE-2026-11940",
+                "CVE-2026-15308",
+                "CVE-2026-6100",
+                "CVE-2026-4224",
+                "CVE-2026-11972",
+                "CVE-2026-3644",
+                "CVE-2026-9669",
+                "CVE-2026-3298",
+                "CVE-2026-4786",
+            },
+        )
+        for statement in self.vex["statements"]:
+            self.assertEqual(statement["status"], "fixed")
+            product = statement["products"]
+            self.assertEqual(product[0]["@id"], "atellagent-client:scan")
+            self.assertEqual(
+                product[0]["subcomponents"], [{"@id": "pkg:generic/python@3.11.16"}]
+            )
 
     def test_public_inventory_and_docker_docs_cover_the_runtime_contract(self) -> None:
         setup_tree = ast.parse((self.root / "setup.py").read_text(encoding="utf-8"))

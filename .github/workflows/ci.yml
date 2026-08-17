@@ -227,7 +227,7 @@ jobs:
           set -euo pipefail
           test "$(docker image inspect --format '{{json .Config.ExposedPorts}}' atellagent-client:inspect)" = "null"
           test "$(docker image inspect --format '{{.Config.User}}' atellagent-client:inspect)" = "10001:10001"
-          test "$(docker image inspect --format '{{ index .Config.Labels \"io.atellagent.client-wheel-sha256\" }}' atellagent-client:inspect)" = '${{ needs.public-release-boundary.outputs.wheel_sha256 }}'
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.atellagent.client-wheel-sha256" }}' atellagent-client:inspect)" = '${{ needs.public-release-boundary.outputs.wheel_sha256 }}'
           docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m --user 10001:10001 --entrypoint /bin/sh atellagent-client:inspect -ec '
             test ! -e /src
             test ! -e /tests
@@ -268,8 +268,16 @@ jobs:
       - uses: anchore/scan-action@f6601287cdb1efc985d6b765bbf99cb4c0ac29d8 # v7.0.0
         with:
           image: atellagent-client:scan
+          fail-build: false
+          output-format: table
+      - name: Fail on remediable High or Critical findings
+        uses: anchore/scan-action@f6601287cdb1efc985d6b765bbf99cb4c0ac29d8 # v7.0.0
+        with:
+          image: atellagent-client:scan
           severity-cutoff: high
           fail-build: true
+          only-fixed: true
+          vex: security/vex/python-3.11.16.openvex.json
 
   client-release:
     needs: [public-release-boundary, docker-smoke, container-platform-scan]
