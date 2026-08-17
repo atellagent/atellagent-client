@@ -40,6 +40,19 @@ class ModelDecisionContractTests(unittest.TestCase):
                 messages=[{"role": "user", "content": "hello"}],
                 model="unavailable-to-hook",
             )
+        with self.assertRaisesRegex(ValueError, "exactly one user message"):
+            ModelDecisionRequest(
+                input_scope="turn_entry",
+                messages=[{"role": "system", "content": "not a user prompt"}],
+            )
+        with self.assertRaisesRegex(ValueError, "exactly one user message"):
+            ModelDecisionRequest(
+                input_scope="turn_entry",
+                messages=[
+                    {"role": "user", "content": "first"},
+                    {"role": "user", "content": "second"},
+                ],
+            )
 
     def test_full_request_binds_provider_visible_request_options(self) -> None:
         request = ModelDecisionRequest(

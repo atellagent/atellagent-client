@@ -135,6 +135,10 @@ class ModelDecisionRequest:
             raise ValueError("turn_entry must not provide model or provider")
         if self.input_scope == "turn_entry" and self.provider_request:
             raise ValueError("turn_entry must not provide provider_request")
+        if self.input_scope == "turn_entry" and (
+            len(self.messages) != 1 or self.messages[0].get("role") != "user"
+        ):
+            raise ValueError("turn_entry requires exactly one user message")
         if self.provider_request is not None and not isinstance(self.provider_request, dict):
             raise ValueError("provider_request must be an object when provided")
 

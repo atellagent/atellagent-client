@@ -20,9 +20,10 @@ exit-2 denial before the host timeout expires.
 ## Coverage
 
 Claude Code and Codex `UserPromptSubmit` are governed as a `turn_entry` model
-decision: they cover the submitted host prompt before the host processes it,
-not subsequent model requests. Gemini CLI `BeforeModel` is governed as a
-`full_model_request` decision because that documented hook supplies the
+decision: the request contains exactly the one submitted user prompt. It covers
+that prompt before the host processes it, not subsequent model requests.
+Gemini CLI `BeforeModel` is governed as a `full_model_request` decision because
+that documented hook supplies the
 outbound model request. `PreToolUse` is a synchronous preflight.
 `PostToolUse` records the correlated outcome; Claude Code also supplies
 `PostToolUseFailure`.
