@@ -78,7 +78,7 @@ _MODEL_RUNTIME_FIELDS = {
 
 _FILTER_RUNTIME_FIELDS = {
     "filter_id",
-    "mode",
+    "execution_boundary",
     "content",
     "request_id",
     "workflow_context",
@@ -110,7 +110,7 @@ class ModelRuntimeInvocationRequest:
 @dataclass(frozen=True)
 class FilterRuntimeEvaluationRequest:
     filter_id: str
-    mode: str
+    execution_boundary: str
     content: Any = None
     request_id: Optional[str] = None
     workflow_context: Dict[str, Any] = field(default_factory=dict)
@@ -187,10 +187,14 @@ def coerce_filter_runtime_evaluation_request(
     filter_id = str(raw.get("filter_id") or "").strip()
     if not filter_id:
         raise ValueError("filter_id is required")
-    mode = str(raw.get("mode") or "").strip().lower() or "input_check"
+    execution_boundary = str(raw.get("execution_boundary") or "").strip().lower()
+    if execution_boundary not in {"model_boundary", "tool_response", "egress"}:
+        raise ValueError(
+            "execution_boundary must be model_boundary, tool_response, or egress"
+        )
     return FilterRuntimeEvaluationRequest(
         filter_id=filter_id,
-        mode=mode,
+        execution_boundary=execution_boundary,
         content=raw.get("content"),
         request_id=str(raw.get("request_id") or "").strip() or None,
         workflow_context=_public_workflow_context(raw.get("workflow_context")),

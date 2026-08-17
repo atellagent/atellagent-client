@@ -82,8 +82,6 @@ class HuggingFaceTextClassificationFilter(FilterRuntimeHandlerBase):
         self,
         request: FilterRuntimeEvaluationRequest,
     ) -> Dict[str, Any]:
-        if request.mode != "input_check":
-            raise ValueError("Hugging Face filter supports input_check only")
         content = request.content if isinstance(request.content, str) else ""
         classifier = self._classifier()
         if inspect.iscoroutinefunction(classifier) or inspect.iscoroutinefunction(
@@ -119,7 +117,7 @@ class HuggingFaceTextClassificationFilter(FilterRuntimeHandlerBase):
             "metadata": {
                 "provider": "huggingface",
                 "model_id": self.model_id,
-                "mode": request.mode,
+                "execution_boundary": request.execution_boundary,
                 "threshold": float(self.threshold),
             },
         }

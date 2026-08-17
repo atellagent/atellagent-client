@@ -19,6 +19,7 @@ from atellagent_client.integrations.models import (
 from atellagent_client.integrations.models.contracts import (
     FilterRuntimeEvaluationRequest,
     ModelRuntimeInvocationRequest,
+    coerce_filter_runtime_evaluation_request,
 )
 
 
@@ -216,7 +217,7 @@ class ModelIntegrationTests(unittest.TestCase):
             result = await handler.evaluate_filter(
                 FilterRuntimeEvaluationRequest(
                     filter_id="customer.classification",
-                    mode="input_check",
+                    execution_boundary="egress",
                     content="synthetic classification fixture",
                 )
             )
@@ -224,18 +225,39 @@ class ModelIntegrationTests(unittest.TestCase):
             self.assertEqual(result["score"], 0.91)
             self.assertEqual(result["scores"]["customer.classification"], 0.91)
             self.assertEqual(result["violations"], ["toxic"])
-            self.assertEqual(result["metadata"]["mode"], "input_check")
+            self.assertEqual(result["metadata"]["execution_boundary"], "egress")
 
-            with self.assertRaisesRegex(ValueError, "input_check only"):
-                await handler.evaluate_filter(
-                    FilterRuntimeEvaluationRequest(
-                        filter_id="customer.classification",
-                        mode="output_check",
-                        content="synthetic classification fixture",
+            self.assertFalse(
+                (
+                    await handler.evaluate_filter(
+                        FilterRuntimeEvaluationRequest(
+                            filter_id="customer.classification",
+                            execution_boundary="tool_response",
+                            content="synthetic classification fixture",
+                        )
                     )
-                )
+                )["allowed"]
+            )
 
         asyncio.run(run())
+
+    def test_filter_request_requires_one_explicit_semantic_boundary(self) -> None:
+        request = coerce_filter_runtime_evaluation_request(
+            {
+                "filter_id": "customer.classification",
+                "execution_boundary": "model_boundary",
+                "content": "synthetic classification fixture",
+            }
+        )
+        self.assertEqual(request.execution_boundary, "model_boundary")
+        with self.assertRaisesRegex(ValueError, "unsupported fields: mode"):
+            coerce_filter_runtime_evaluation_request(
+                {"filter_id": "customer.classification", "mode": "input_check"}
+            )
+        with self.assertRaisesRegex(ValueError, "execution_boundary"):
+            coerce_filter_runtime_evaluation_request(
+                {"filter_id": "customer.classification", "execution_boundary": "unknown"}
+            )
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ from atellagent_client.connected import (
     ConnectedParticipant,
     ConnectedProtocolError,
     mount_agent_handler,
+    mount_filter_handler,
     mount_mcp_handler,
     mount_workflow_handler,
 )
@@ -251,6 +252,43 @@ class ConnectedRuntimeTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         customer_handler.assert_awaited_once()
+
+    async def test_filter_mount_requires_and_preserves_the_explicit_boundary(self) -> None:
+        participant = SimpleNamespace(register_handler=Mock())
+
+        class FilterHandler:
+            request = None
+
+            async def evaluate_filter(self, request):
+                self.request = request
+                return {"allowed": True, "score": 0.0}
+
+        handler = FilterHandler()
+        mount_filter_handler(participant, handler, target_idempotent=True)
+        mounted = participant.register_handler.call_args.args[1]
+        delivery = ConnectedDelivery(
+            message_id=str(uuid4()),
+            kind="action",
+            operation="filter.evaluate",
+            execution_id=None,
+            execution_attempt_id=None,
+            idempotency_key="filter-effect-1",
+            payload_schema="atellagent.connected.ml-filter-evaluation.v1",
+            payload={
+                "input": {
+                    "filter_id": "prompt_injection",
+                    "execution_boundary": "model_boundary",
+                    "content": "synthetic filter fixture",
+                }
+            },
+            delivery_attempt=1,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+        )
+
+        result = await mounted(delivery, SimpleNamespace())
+
+        self.assertEqual(handler.request.execution_boundary, "model_boundary")
+        self.assertEqual(result.result_payload["score"], 0.0)
 
     async def test_certificate_reload_rebuilds_owned_tls_session(self) -> None:
         config = _config()
