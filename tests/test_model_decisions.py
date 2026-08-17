@@ -41,6 +41,27 @@ class ModelDecisionContractTests(unittest.TestCase):
                 model="unavailable-to-hook",
             )
 
+    def test_full_request_binds_provider_visible_request_options(self) -> None:
+        request = ModelDecisionRequest(
+            input_scope="full_model_request",
+            messages=[{"role": "user", "content": "hello"}],
+            model="gemini-2.5-pro",
+            provider="google",
+            provider_request={"config": {"temperature": 0.2}},
+        )
+        self.assertEqual(
+            request.to_payload()["provider_request"],
+            {"config": {"temperature": 0.2}},
+        )
+        with self.assertRaisesRegex(
+            ValueError, "turn_entry must not provide provider_request"
+        ):
+            ModelDecisionRequest(
+                input_scope="turn_entry",
+                messages=[{"role": "user", "content": "hello"}],
+                provider_request={"config": {}},
+            )
+
     def test_response_projection_excludes_undocumented_internal_fields(self) -> None:
         decision = ModelDecision.from_payload(
             {
@@ -53,6 +74,7 @@ class ModelDecisionContractTests(unittest.TestCase):
                 "obligations": [{"type": "record"}],
                 "decision_id": "decision-1",
                 "correlation_id": "correlation-1",
+                "request_fingerprint": "a" * 64,
                 "engine_details": {"must_not": "escape"},
                 "scores": {"must_not": "escape"},
             }
@@ -61,6 +83,7 @@ class ModelDecisionContractTests(unittest.TestCase):
         self.assertEqual(decision.obligations, ({"type": "record"},))
         self.assertFalse(hasattr(decision, "engine_details"))
         self.assertFalse(hasattr(decision, "scores"))
+        self.assertEqual(decision.request_fingerprint, "a" * 64)
 
     def test_connected_agent_requires_cluster_provisioned_identity_mode(self) -> None:
         kwargs = {

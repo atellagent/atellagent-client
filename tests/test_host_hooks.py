@@ -134,7 +134,16 @@ class HostHookAdapterTests(unittest.IsolatedAsyncioTestCase):
             "hook_event_name": "BeforeModel",
             "session_id": "session-1",
             "timestamp": "2026-08-14T23:15:00Z",
-            "llm_request": {"messages": [{"role": "user", "content": "inspect this repository"}]},
+            "llm_request": {
+                "model": "gemini-2.5-pro",
+                "messages": [
+                    {"role": "system", "content": "Work carefully."},
+                    {"role": "user", "content": "inspect this repository"},
+                    {"role": "model", "content": "I will inspect it."},
+                ],
+                "config": {"temperature": 0.2},
+                "toolConfig": {"mode": "AUTO"},
+            },
         }
         allowed = await self._handle("gemini-cli", model)
         self.assertEqual(allowed.exit_code, 0)
@@ -142,7 +151,21 @@ class HostHookAdapterTests(unittest.IsolatedAsyncioTestCase):
         method, params = self.calls[-1]
         self.assertEqual(method, "model.decision")
         self.assertEqual(params["host"], "gemini_cli")
-        self.assertEqual(params["messages"], model["llm_request"]["messages"])
+        self.assertEqual(params["input_scope"], "full_model_request")
+        self.assertEqual(params["model"], "gemini-2.5-pro")
+        self.assertEqual(params["provider"], "google")
+        self.assertEqual(
+            params["messages"],
+            [
+                {"role": "system", "content": "Work carefully."},
+                {"role": "user", "content": "inspect this repository"},
+                {"role": "assistant", "content": "I will inspect it."},
+            ],
+        )
+        self.assertEqual(
+            params["provider_request"],
+            {"config": {"temperature": 0.2}, "toolConfig": {"mode": "AUTO"}},
+        )
 
         tool = {
             "hook_event_name": "BeforeTool",

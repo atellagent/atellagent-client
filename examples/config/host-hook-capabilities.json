@@ -14,7 +14,7 @@
     },
     "gemini-cli": {
       "transport": "command",
-      "events": {"BeforeModel": "turn_entry", "BeforeTool": "preflight"},
+      "events": {"BeforeModel": "full_model_request", "BeforeTool": "preflight"},
       "exclusions": ["AfterModel (not supported)", "tool outcomes without a stable host tool-call identifier"]
     }
   }

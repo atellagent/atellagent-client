@@ -73,7 +73,7 @@ def host_hook_capabilities() -> dict[str, Any]:
             "gemini-cli": {
                 "transport": "command",
                 "events": {
-                    "BeforeModel": "turn_entry",
+                    "BeforeModel": "full_model_request",
                     "BeforeTool": "preflight",
                 },
                 "exclusions": [
@@ -186,10 +186,30 @@ async def _handle_gemini_before_model(
 ) -> HookAdapterResponse:
     _event(event, ("BeforeModel",))
     request = event.get("llm_request")
-    if not isinstance(request, Mapping) or not isinstance(request.get("messages"), list):
+    if (
+        not isinstance(request, Mapping)
+        or not isinstance(request.get("messages"), list)
+        or not isinstance(request.get("model"), str)
+        or not str(request["model"]).strip()
+    ):
         raise ValueError("invalid hook input")
     session_id = _string(event, "session_id")
-    messages = list(request["messages"])
+    messages: list[dict[str, Any]] = []
+    for message in request["messages"]:
+        if not isinstance(message, Mapping):
+            raise ValueError("invalid hook input")
+        normalized = dict(message)
+        # Gemini's stable hook contract calls an assistant message "model";
+        # the portable Atellagent request contract calls the same role
+        # "assistant". No content is changed by this adapter translation.
+        if normalized.get("role") == "model":
+            normalized["role"] = "assistant"
+        messages.append(normalized)
+    provider_request = {
+        key: request[key]
+        for key in ("config", "toolConfig")
+        if key in request
+    }
     turn_id = _gemini_turn_id(event, fallback=json.dumps(messages, sort_keys=True, separators=(",", ":")))
     result = await _call(
         socket_path,
@@ -198,7 +218,11 @@ async def _handle_gemini_before_model(
             "host": "gemini_cli",
             "session_id": session_id,
             "turn_id": turn_id,
+            "input_scope": "full_model_request",
             "messages": messages,
+            "model": str(request["model"]).strip(),
+            "provider": "google",
+            "provider_request": provider_request,
         },
     )
     return _prompt_result("gemini-cli", _allowed(result))

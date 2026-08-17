@@ -80,7 +80,10 @@ def _messages(value: Any) -> list[Dict[str, Any]]:
         if not isinstance(message, Mapping):
             raise HookControlError("invalid_messages")
         normalized = dict(message)
-        if not isinstance(normalized.get("role"), str) or not normalized["role"].strip():
+        role = normalized.get("role")
+        if role not in {"system", "user", "assistant", "tool", "function"}:
+            raise HookControlError("invalid_messages")
+        if not isinstance(normalized.get("content"), str):
             raise HookControlError("invalid_messages")
         messages.append(normalized)
     return messages
@@ -316,15 +319,41 @@ class HookControlRuntime:
         params = _object(
             raw_params,
             "params",
-            allowed={"host", "session_id", "turn_id", "messages"},
+            allowed={
+                "host",
+                "session_id",
+                "turn_id",
+                "input_scope",
+                "messages",
+                "model",
+                "provider",
+                "provider_request",
+            },
         )
         self._turn_fields(params, include_tool=False)
-        decision = await self.governance.model_decision_async(
-            ModelDecisionRequest(
-                input_scope="turn_entry",
-                messages=_messages(params.get("messages")),
-            )
+        input_scope = str(params.get("input_scope") or "turn_entry").strip()
+        if input_scope not in {"turn_entry", "full_model_request"}:
+            raise HookControlError("invalid_input_scope")
+        provider_request = params.get("provider_request")
+        if provider_request is not None and not isinstance(provider_request, Mapping):
+            raise HookControlError("invalid_provider_request")
+        decision_request = ModelDecisionRequest(
+            input_scope=input_scope,  # type: ignore[arg-type]
+            messages=_messages(params.get("messages")),
+            model=(str(params["model"]) if params.get("model") is not None else None),
+            provider=(
+                str(params["provider"])
+                if params.get("provider") is not None
+                else None
+            ),
+            provider_request=(dict(provider_request) if provider_request else None),
         )
+        decision = await self.governance.model_decision_async(decision_request)
+        if (
+            decision.input_scope != decision_request.input_scope
+            or decision.request_fingerprint != decision_request.request_fingerprint
+        ):
+            raise HookControlError("decision_binding_invalid")
         if decision.obligations:
             raise HookControlError("unsupported_obligation")
         return {

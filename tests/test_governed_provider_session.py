@@ -18,7 +18,9 @@ from atellagent_client.protocol.agent_contracts import ModelDecision, ModelDecis
 from atellagent_client.sdk.errors import PolicyTransportError, PolicyViolationError
 
 
-def _decision(outcome: str = "allow") -> ModelDecision:
+def _decision(
+    request: ModelDecisionRequest | None = None, outcome: str = "allow"
+) -> ModelDecision:
     return ModelDecision(
         outcome=outcome,  # type: ignore[arg-type]
         enforcement="enforced",
@@ -30,6 +32,7 @@ def _decision(outcome: str = "allow") -> ModelDecision:
         valid_until=None,
         decision_id="decision-1",
         correlation_id="correlation-1",
+        request_fingerprint=(request.request_fingerprint if request else "a" * 64),
     )
 
 
@@ -39,9 +42,9 @@ class GovernedProviderSessionTests(unittest.TestCase):
             def __init__(self):
                 self.decisions = 0
 
-            async def model_decision_async(self, *_args, **_kwargs):
+            async def model_decision_async(self, request, **_kwargs):
                 self.decisions += 1
-                return _decision()
+                return _decision(request)
 
             async def governed_model_call_async(self, **_kwargs):
                 raise AssertionError("decision transport must not route")
@@ -80,7 +83,7 @@ class GovernedProviderSessionTests(unittest.TestCase):
 
             async def model_decision_async(self, request, **_kwargs):
                 self.requests.append(request)
-                return _decision()
+                return _decision(request)
 
         async def run(provider: str):
             governance = Governance()
@@ -115,8 +118,8 @@ class GovernedProviderSessionTests(unittest.TestCase):
 
     def test_denied_decision_prevents_native_provider_turn(self) -> None:
         class Governance:
-            async def model_decision_async(self, *_args, **_kwargs):
-                return _decision("deny")
+            async def model_decision_async(self, request, **_kwargs):
+                return _decision(request, "deny")
 
         async def run():
             session = GovernedProviderSession(
@@ -140,9 +143,9 @@ class GovernedProviderSessionTests(unittest.TestCase):
 
     def test_advisory_allow_executes_native_turn_and_records_decision(self) -> None:
         class Governance:
-            async def model_decision_async(self, *_args, **_kwargs):
+            async def model_decision_async(self, request, **_kwargs):
                 return ModelDecision(
-                    **{**_decision().__dict__, "enforcement": "advisory"}
+                    **{**_decision(request).__dict__, "enforcement": "advisory"}
                 )
 
         async def run():
@@ -165,13 +168,13 @@ class GovernedProviderSessionTests(unittest.TestCase):
 
     def test_transport_failure_or_unfulfilled_obligation_never_calls_native_provider(self) -> None:
         class TransportFailureGovernance:
-            async def model_decision_async(self, *_args, **_kwargs):
+            async def model_decision_async(self, request, **_kwargs):
                 raise PolicyTransportError("decision unavailable")
 
         class ObligatingGovernance:
-            async def model_decision_async(self, *_args, **_kwargs):
+            async def model_decision_async(self, request, **_kwargs):
                 return ModelDecision(
-                    **{**_decision().__dict__, "obligations": ({"type": "approval"},)}
+                    **{**_decision(request).__dict__, "obligations": ({"type": "approval"},)}
                 )
 
         async def run(governance, error_type):
@@ -197,8 +200,8 @@ class GovernedProviderSessionTests(unittest.TestCase):
 
     def test_provider_error_propagates_after_recording_the_admission(self) -> None:
         class Governance:
-            async def model_decision_async(self, *_args, **_kwargs):
-                return _decision()
+            async def model_decision_async(self, request, **_kwargs):
+                return _decision(request)
 
         async def run():
             session = GovernedProviderSession(
@@ -222,9 +225,9 @@ class GovernedProviderSessionTests(unittest.TestCase):
 
     def test_scope_mismatch_is_a_control_failure_before_native_transport(self) -> None:
         class Governance:
-            async def model_decision_async(self, *_args, **_kwargs):
+            async def model_decision_async(self, request, **_kwargs):
                 return ModelDecision(
-                    **{**_decision().__dict__, "input_scope": "turn_entry"}
+                    **{**_decision(request).__dict__, "input_scope": "turn_entry"}
                 )
 
         async def run():
@@ -240,6 +243,39 @@ class GovernedProviderSessionTests(unittest.TestCase):
                         model="test-model",
                         provider="openai",
                     ),
+                    invoke=lambda: (_ for _ in ()).throw(
+                        AssertionError("native provider must not run")
+                    ),
+                )
+
+        asyncio.run(run())
+
+    def test_request_fingerprint_mismatch_prevents_native_transport(self) -> None:
+        async def run():
+            request = ModelDecisionRequest(
+                input_scope="full_model_request",
+                messages=[{"role": "user", "content": "bound"}],
+                model="test-model",
+                provider="openai",
+            )
+            mismatched = ModelDecisionRequest(
+                input_scope="full_model_request",
+                messages=[{"role": "user", "content": "different"}],
+                model="test-model",
+                provider="openai",
+            )
+
+            class Governance:
+                async def model_decision_async(self, _request, **_kwargs):
+                    return _decision(mismatched)
+
+            session = GovernedProviderSession(
+                governance=Governance(),  # type: ignore[arg-type]
+                mode=ModelGovernanceMode.DECISION,
+            )
+            with self.assertRaisesRegex(PolicyTransportError, "not bound"):
+                await session.native_turn(
+                    decision_request=request,
                     invoke=lambda: (_ for _ in ()).throw(
                         AssertionError("native provider must not run")
                     ),

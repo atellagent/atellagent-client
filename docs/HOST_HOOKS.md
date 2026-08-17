@@ -19,10 +19,13 @@ exit-2 denial before the host timeout expires.
 
 ## Coverage
 
-`UserPromptSubmit` is governed as a `turn_entry` model decision: it covers the
-submitted host prompt before the host processes it, not subsequent model
-requests. `PreToolUse` is a synchronous preflight. `PostToolUse` records the
-correlated outcome; Claude Code also supplies `PostToolUseFailure`.
+Claude Code and Codex `UserPromptSubmit` are governed as a `turn_entry` model
+decision: they cover the submitted host prompt before the host processes it,
+not subsequent model requests. Gemini CLI `BeforeModel` is governed as a
+`full_model_request` decision because that documented hook supplies the
+outbound model request. `PreToolUse` is a synchronous preflight.
+`PostToolUse` records the correlated outcome; Claude Code also supplies
+`PostToolUseFailure`.
 
 Calls to the `mcp__atellagent__*` facade deliberately skip host preflight and
 postflight because that facade is governed at its MCP effect boundary. Codex

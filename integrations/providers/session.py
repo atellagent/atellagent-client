@@ -62,6 +62,8 @@ class DecisionModelTransport:
         )
         if decision.input_scope != decision_request.input_scope:
             raise PolicyTransportError("model decision response scope did not match the request")
+        if decision.request_fingerprint != decision_request.request_fingerprint:
+            raise PolicyTransportError("model decision response was not bound to the request")
         if decision.outcome != "allow":
             raise PolicyViolationError(
                 decision.reason,

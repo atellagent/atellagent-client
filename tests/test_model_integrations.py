@@ -207,19 +207,33 @@ class ModelIntegrationTests(unittest.TestCase):
             ]
 
         async def run() -> None:
-            handler = HuggingFaceTextClassificationFilter(classifier=classifier, threshold=0.7)
+            handler = HuggingFaceTextClassificationFilter(
+                model_id="customer/example-classifier",
+                blocked_labels=("toxic",),
+                classifier=classifier,
+                threshold=0.7,
+            )
             result = await handler.evaluate_filter(
                 FilterRuntimeEvaluationRequest(
-                    filter_id="toxicity",
-                    mode="output_check",
-                    content="unsafe generated output",
+                    filter_id="customer.classification",
+                    mode="input_check",
+                    content="synthetic classification fixture",
                 )
             )
             self.assertFalse(result["allowed"])
             self.assertEqual(result["score"], 0.91)
-            self.assertEqual(result["scores"]["toxicity"], 0.91)
+            self.assertEqual(result["scores"]["customer.classification"], 0.91)
             self.assertEqual(result["violations"], ["toxic"])
-            self.assertEqual(result["metadata"]["mode"], "output_check")
+            self.assertEqual(result["metadata"]["mode"], "input_check")
+
+            with self.assertRaisesRegex(ValueError, "input_check only"):
+                await handler.evaluate_filter(
+                    FilterRuntimeEvaluationRequest(
+                        filter_id="customer.classification",
+                        mode="output_check",
+                        content="synthetic classification fixture",
+                    )
+                )
 
         asyncio.run(run())
 

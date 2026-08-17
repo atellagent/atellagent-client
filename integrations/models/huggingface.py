@@ -33,22 +33,23 @@ def _classification_rows(value: Any) -> list[Dict[str, Any]]:
 
 @dataclass
 class HuggingFaceTextClassificationFilter(FilterRuntimeHandlerBase):
-    """Evaluate a text-classification model as an input or output filter.
+    """Evaluate a customer-selected text-classification model on input text.
 
     ``blocked_labels`` is intentionally explicit: labels are model-specific, so
-    a runtime owner—not the client package—chooses which labels should withhold
-    content. The default model is a common toxicity classifier and is loaded
-    lazily on first evaluation.
+    a runtime owner—not the client package—chooses the model and labels used
+    for its own filter. The client supplies no built-in content classification.
     """
 
-    model_id: str = "unitary/toxic-bert"
-    blocked_labels: tuple[str, ...] = ("toxic",)
+    model_id: str = ""
+    blocked_labels: tuple[str, ...] = ()
     threshold: float = 0.5
     classifier: Any = None
     pipeline_kwargs: Dict[str, Any] = field(default_factory=dict)
     _resolved_classifier: Any = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if not _text(self.model_id):
+            raise ValueError("Hugging Face filter requires an explicit model_id")
         if not 0.0 <= float(self.threshold) <= 1.0:
             raise ValueError("Hugging Face filter threshold must be between 0 and 1")
         normalized_labels = tuple(
@@ -81,8 +82,8 @@ class HuggingFaceTextClassificationFilter(FilterRuntimeHandlerBase):
         self,
         request: FilterRuntimeEvaluationRequest,
     ) -> Dict[str, Any]:
-        if request.mode not in {"input_check", "output_check"}:
-            raise ValueError("Hugging Face filter supports input_check and output_check")
+        if request.mode != "input_check":
+            raise ValueError("Hugging Face filter supports input_check only")
         content = request.content if isinstance(request.content, str) else ""
         classifier = self._classifier()
         if inspect.iscoroutinefunction(classifier) or inspect.iscoroutinefunction(

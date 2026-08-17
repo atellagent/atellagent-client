@@ -84,13 +84,19 @@ class _Governance:
             valid_until=None,
             decision_id="decision-1",
             correlation_id="correlation-1",
+            request_fingerprint="a" * 64,
         )
 
     async def model_decision_async(self, request, **_kwargs):
         self.model_request = request
         if self.decision_delay_seconds:
             await asyncio.sleep(self.decision_delay_seconds)
-        return self.model
+        return ModelDecision(
+            **{
+                **self.model.__dict__,
+                "request_fingerprint": request.request_fingerprint,
+            }
+        )
 
     async def preflight_async(self, context):
         self.preflights.append(context)
@@ -176,6 +182,46 @@ class HookControlRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.governance.model_request.input_scope, "turn_entry")
         self.assertIsNone(self.governance.model_request.provider)
         self.assertIsNone(self.governance.model_request.model)
+
+    async def test_full_request_decision_requires_explicit_hook_visible_target(self) -> None:
+        self.governance.model = ModelDecision(
+            **{
+                **self.governance.model.__dict__,
+                "input_scope": "full_model_request",
+            }
+        )
+        result = await self.client.call(
+            "model.decision",
+            {
+                **self._turn_fields(),
+                "input_scope": "full_model_request",
+                "messages": [{"role": "user", "content": "hello"}],
+                "model": "gemini-2.5-pro",
+                "provider": "google",
+                "provider_request": {"config": {"temperature": 0.2}},
+            },
+        )
+        self.assertTrue(result["allowed"])
+        self.assertEqual(self.governance.model_request.input_scope, "full_model_request")
+        self.assertEqual(self.governance.model_request.provider, "google")
+        self.assertEqual(
+            self.governance.model_request.provider_request,
+            {"config": {"temperature": 0.2}},
+        )
+
+    async def test_mismatched_model_decision_binding_fails_closed(self) -> None:
+        async def mismatched(_request, **_kwargs):
+            return self.governance.model
+
+        self.governance.model_decision_async = mismatched
+        with self.assertRaisesRegex(HookControlError, "decision_binding_invalid"):
+            await self.client.call(
+                "model.decision",
+                {
+                    **self._turn_fields(),
+                    "messages": [{"role": "user", "content": "hello"}],
+                },
+            )
 
     async def test_authority_fields_and_unsupported_obligations_fail_closed(self) -> None:
         with self.assertRaisesRegex(HookControlError, "unsupported_params_field"):
