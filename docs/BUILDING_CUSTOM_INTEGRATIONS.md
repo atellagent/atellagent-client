@@ -74,6 +74,10 @@ or base class, then are mounted on a `ConnectedSDKRuntime` with
 The type-specific request objects validate the supported public input and the
 adapter returns the corresponding result object or mapping.
 
+A filter handler returns a JSON object with a finite `score` from `0` through
+`1`. Invalid or missing scores are rejected, so an enforced filter decision
+cannot continue on malformed handler output.
+
 For channels, implement the ingress and/or egress Protocol, give the adapter a
 `channel_type` and optional provider/adapter keys, and register it with
 `ChannelAdapterRegistry`. The connected participant resolves the registered

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Any, Dict, List, Mapping, Optional, Protocol, runtime_checkable
 
 from atellagent_client.protocol.context import (
@@ -218,6 +219,13 @@ def coerce_filter_runtime_result(payload: Any) -> Dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise ValueError("filter runtime handler must return a JSON object")
     result = dict(payload)
+    score = result.get("score")
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        raise ValueError("filter runtime handler must return a numeric score")
+    score = float(score)
+    if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+        raise ValueError("filter runtime handler score must be between 0 and 1")
+    result["score"] = score
     result["allowed"] = bool(result.get("allowed", False))
     if "violations" in result:
         result["violations"] = _coerce_text_list(result.get("violations"))

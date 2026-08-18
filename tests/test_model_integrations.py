@@ -19,6 +19,7 @@ from atellagent_client.integrations.models import (
 from atellagent_client.integrations.models.contracts import (
     FilterRuntimeEvaluationRequest,
     ModelRuntimeInvocationRequest,
+    coerce_filter_runtime_result,
     coerce_filter_runtime_evaluation_request,
 )
 
@@ -258,6 +259,23 @@ class ModelIntegrationTests(unittest.TestCase):
             coerce_filter_runtime_evaluation_request(
                 {"filter_id": "customer.classification", "execution_boundary": "unknown"}
             )
+
+    def test_filter_result_requires_a_finite_normalized_score(self) -> None:
+        self.assertEqual(
+            coerce_filter_runtime_result({"score": 0.5}),
+            {"score": 0.5, "allowed": False, "violations": []},
+        )
+        for payload in (
+            {},
+            {"score": True},
+            {"score": "0.5"},
+            {"score": float("nan")},
+            {"score": float("inf")},
+            {"score": -0.01},
+            {"score": 1.01},
+        ):
+            with self.assertRaisesRegex(ValueError, "score"):
+                coerce_filter_runtime_result(payload)
 
 
 if __name__ == "__main__":
