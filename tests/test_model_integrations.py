@@ -260,10 +260,10 @@ class ModelIntegrationTests(unittest.TestCase):
                 {"filter_id": "customer.classification", "execution_boundary": "unknown"}
             )
 
-    def test_filter_result_requires_a_finite_normalized_score(self) -> None:
+    def test_filter_result_requires_complete_coverage_and_a_finite_normalized_score(self) -> None:
         self.assertEqual(
-            coerce_filter_runtime_result({"score": 0.5}),
-            {"score": 0.5, "allowed": False, "violations": []},
+            coerce_filter_runtime_result({"score": 0.5, "coverage": "complete"}),
+            {"score": 0.5, "coverage": "complete", "allowed": False, "violations": []},
         )
         for payload in (
             {},
@@ -275,6 +275,13 @@ class ModelIntegrationTests(unittest.TestCase):
             {"score": 1.01},
         ):
             with self.assertRaisesRegex(ValueError, "score"):
+                coerce_filter_runtime_result(payload)
+        for payload in (
+            {"score": 0.5},
+            {"score": 0.5, "coverage": "partial"},
+            {"score": 0.5, "coverage": "unknown"},
+        ):
+            with self.assertRaisesRegex(ValueError, "coverage"):
                 coerce_filter_runtime_result(payload)
 
 

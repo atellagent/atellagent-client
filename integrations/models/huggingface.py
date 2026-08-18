@@ -107,6 +107,7 @@ class HuggingFaceTextClassificationFilter(FilterRuntimeHandlerBase):
         allowed = score < float(self.threshold)
         return {
             "allowed": allowed,
+            "coverage": "complete",
             "score": score,
             "scores": {request.filter_id: score, **label_scores},
             "violations": sorted(label for label, value in blocked_scores.items() if value >= self.threshold),

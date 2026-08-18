@@ -261,7 +261,7 @@ class ConnectedRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
             async def evaluate_filter(self, request):
                 self.request = request
-                return {"allowed": True, "score": 0.0}
+                return {"allowed": True, "coverage": "complete", "score": 0.0}
 
         handler = FilterHandler()
         mount_filter_handler(participant, handler, target_idempotent=True)

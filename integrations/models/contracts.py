@@ -226,6 +226,10 @@ def coerce_filter_runtime_result(payload: Any) -> Dict[str, Any]:
     if not math.isfinite(score) or not 0.0 <= score <= 1.0:
         raise ValueError("filter runtime handler score must be between 0 and 1")
     result["score"] = score
+    coverage = result.get("coverage")
+    if not isinstance(coverage, str) or coverage.strip().lower() != "complete":
+        raise ValueError("filter runtime handler must return coverage='complete'")
+    result["coverage"] = "complete"
     result["allowed"] = bool(result.get("allowed", False))
     if "violations" in result:
         result["violations"] = _coerce_text_list(result.get("violations"))
