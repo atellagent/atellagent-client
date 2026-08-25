@@ -1,7 +1,9 @@
 # Atellagent Client documentation
 
-Choose the guide that matches where Atellagent joins your application. These
-guides describe public client contracts only.
+Atellagent Client is Agent Authority's local enforcement path for
+customer-operated runtimes. Choose the guide that matches the boundary where
+it joins your application. These guides describe public client contracts only;
+they do not broaden the coverage of a host or integration surface.
 
 | I need to… | Start here |
 | --- | --- |

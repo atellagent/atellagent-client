@@ -1,9 +1,18 @@
 # Atellagent Client
 
-The Atellagent client lets customer-operated code request governance decisions
-and enforce approved tool actions without exposing a customer runtime to inbound
-Atellagent traffic. It is public client code: it implements documented client
-contracts and local verification, not managed-service policy implementation.
+Atellagent Client is the local enforcement component of Agent Authority. It
+extends Agent Authority into customer-operated runtimes, where it can request
+decisions and enforce approved tool actions without exposing the runtime to
+inbound Atellagent traffic. It is public client code: it implements documented
+client contracts and local verification, not managed-service policy
+implementation.
+
+Agent Authority defines the policy and decision model across hosted workspaces
+and participating external runtimes. Atellagent Client is the supported local
+path for customer-owned Python agents, provider SDK calls, MCP peers, private
+bridges, and documented Codex, Claude Code, and Gemini CLI hook boundaries.
+Coverage remains specific to the selected integration surface and the host
+events it exposes.
 
 ## Start here
 
@@ -35,7 +44,7 @@ does not alter hosted runtime architecture.
 | --- | --- | --- |
 | `sdk` | You own the Python agent process. | [SDK](sdk/README.md) |
 | `bridge` | An enrolled participant dispatches to a private target. | [Connected runtime](connected/README.md) |
-| `hook` | Claude Code or Codex needs local prompt/tool controls. | [External hosts](docs/HOST_HOOKS.md) |
+| `hook` | Codex, Claude Code, or Gemini CLI needs local prompt/tool controls. | [External hosts](docs/HOST_HOOKS.md) |
 | `provider_proxy` | You own a provider SDK call and its function tools. | [Provider sessions](integrations/providers/README.md) |
 | `mcp_proxy` | A customer MCP peer needs compatibility handling. | [MCP proxies](proxy/README.md) |
 

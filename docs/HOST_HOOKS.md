@@ -1,9 +1,11 @@
 # External coding-host hooks
 
-The `atellagent-hook-adapter` command connects a supported host command hook to
-an enrolled, local Atellagent hook-control service. The hook command has no
-credential or service-account configuration: it receives host JSON on standard
-input and can only reach the owner-only Unix socket you configure.
+Atellagent Client is the local enforcement path for Agent Authority at the
+documented host-hook checkpoints. The `atellagent-hook-adapter` command
+connects a supported host command hook to an enrolled, local Atellagent
+hook-control service. The hook command has no credential or service-account
+configuration: it receives host JSON on standard input and can only reach the
+owner-only Unix socket you configure.
 
 Start the local control service with an enrolled connected-agent configuration:
 
