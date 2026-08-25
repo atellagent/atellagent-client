@@ -17,11 +17,76 @@ from atellagent_client.protocol.agent_contracts import (
 )
 from atellagent_client.integrations.agents.control_actions import execute_async
 from atellagent_client.integrations.agents.control_actions import preflight_async
+from atellagent_client.integrations.agents.control_model_invocation import (
+    model_decision_async,
+)
 from atellagent_client.governance import ActionDenied
 from atellagent_client.sdk.config_models import SDKDeploymentConfig, ServiceAccountConfig
 
 
 class ModelDecisionContractTests(unittest.TestCase):
+    def test_model_decision_binds_direct_admission_to_request_fingerprint(self) -> None:
+        request = ModelDecisionRequest(
+            input_scope="turn_entry",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        observed_headers = {}
+
+        class Response:
+            status_code = 200
+            content = b"{}"
+
+            @staticmethod
+            def json():
+                return {
+                    "outcome": "allow",
+                    "enforcement": "enforced",
+                    "input_scope": "turn_entry",
+                    "evaluated": {},
+                    "reason_code": "policy.allow",
+                    "reason": "allowed",
+                    "obligations": [],
+                    "decision_id": "decision-1",
+                    "correlation_id": "correlation-1",
+                    "request_fingerprint": request.request_fingerprint,
+                }
+
+        class Session:
+            async def post(self, _url, *, json, headers):
+                if json != request.to_payload():
+                    raise AssertionError("model decision payload changed in transit")
+                observed_headers.update(headers)
+                return Response()
+
+        class Governance:
+            identity_mode = "boundary_identity_only"
+
+            @staticmethod
+            def _merge_context(*, explicit_context, principal_context=None):
+                return dict(explicit_context or {})
+
+            @staticmethod
+            async def _async_headers(_context):
+                return Session(), {"Authorization": "Bearer test"}
+
+            @staticmethod
+            def _raise_gateway_error(_status_code, _payload):
+                raise AssertionError("the response should be successful")
+
+            @staticmethod
+            def _has_bound_principal_context(_context):
+                return False
+
+            gateway_session = SimpleNamespace(base_url="https://gateway.example")
+            config = SimpleNamespace(api_version="v1")
+
+        decision = asyncio.run(model_decision_async(Governance(), request=request))
+        self.assertEqual(decision.outcome, "allow")
+        self.assertEqual(
+            observed_headers["X-Atellagent-Action-Key"],
+            f"model-decision:{request.request_fingerprint}",
+        )
+
     def test_turn_entry_never_serializes_provider_or_model(self) -> None:
         request = ModelDecisionRequest(
             input_scope="turn_entry",

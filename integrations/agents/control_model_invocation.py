@@ -25,6 +25,7 @@ from .identity_mode import FEDERATED_AGENT_IDENTITY
 
 _MODEL_INVOCATIONS_PATH = "/model-invocations"
 _MODEL_DECISIONS_PATH = "/model-decisions"
+_MODEL_DECISION_ACTION_KEY_PREFIX = "model-decision:"
 
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
@@ -36,6 +37,19 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
         return None
     candidate = str(value).strip()
     return candidate or None
+
+
+def _model_decision_headers(
+    headers: Dict[str, str],
+    request: ModelDecisionRequest,
+) -> Dict[str, str]:
+    """Bind an idempotent decision admission to its exact public payload."""
+    return {
+        **headers,
+        "X-Atellagent-Action-Key": (
+            f"{_MODEL_DECISION_ACTION_KEY_PREFIX}{request.request_fingerprint}"
+        ),
+    }
 
 
 def resolve_model_workflow_context_sync(
@@ -175,7 +189,7 @@ def model_decision_sync(
             f"{governance.gateway_session.base_url}"
             f"{build_versioned_route(governance.config.api_version, _MODEL_DECISIONS_PATH)}",
             json=request.to_payload(),
-            headers=headers,
+            headers=_model_decision_headers(headers, request),
         )
     except Exception as exc:
         raise PolicyTransportError("model decision transport unavailable") from exc
@@ -209,7 +223,7 @@ async def model_decision_async(
             f"{governance.gateway_session.base_url}"
             f"{build_versioned_route(governance.config.api_version, _MODEL_DECISIONS_PATH)}",
             json=request.to_payload(),
-            headers=headers,
+            headers=_model_decision_headers(headers, request),
         )
     except Exception as exc:
         raise PolicyTransportError("model decision transport unavailable") from exc
