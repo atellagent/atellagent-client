@@ -194,6 +194,7 @@ PUBLIC_SOURCE_PATHS = (
     "integrations/agents/control_model_invocation.py",
     "integrations/agents/identity_mode.py",
     "integrations/agents/hook_control.py",
+    "integrations/agents/hook_control_protocol.py",
     "integrations/agents/host_hooks.py",
     "integrations/channels/__init__.py",
     "integrations/channels/README.md",
