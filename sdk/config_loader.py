@@ -28,6 +28,7 @@ def load_service_account_config_from_yaml(path: str) -> ServiceAccountConfig:
       capabilities, packaging,
       control_source, identity_mode, local_guardrail_manifest_path, local_guardrail_mode,
       connected runtime path templates, integration_name, integration_type,
+      filter_execution_boundary,
       integration_category, channel,
       deployment, timeout,
       api_version, contract_version
@@ -84,6 +85,7 @@ def load_service_account_config_from_yaml(path: str) -> ServiceAccountConfig:
         "timeout",
         "integration_name",
         "integration_type",
+        "filter_execution_boundary",
         "integration_category",
         "channel",
         "deployment",
@@ -152,6 +154,7 @@ def load_service_account_config_from_yaml(path: str) -> ServiceAccountConfig:
         timeout = 120.0
     integration_name = data.get("integration_name")
     integration_type = data.get("integration_type")
+    filter_execution_boundary = data.get("filter_execution_boundary")
     integration_category = data.get("integration_category")
     channel_section = (
         data.get("channel") if isinstance(data.get("channel"), dict) else {}
@@ -259,6 +262,7 @@ def load_service_account_config_from_yaml(path: str) -> ServiceAccountConfig:
         timeout=timeout,
         integration_name=integration_name,
         integration_type=integration_type,
+        filter_execution_boundary=filter_execution_boundary,
         integration_category=integration_category,
         channel_type=channel_type,
         channel_provider_key=channel_provider_key,

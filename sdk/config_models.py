@@ -119,6 +119,9 @@ class ServiceAccountConfig:
     timeout: float = 120.0
     integration_name: Optional[str] = None
     integration_type: Optional[str] = None
+    # Server-owned semantic placement for a connected customer filter. The
+    # client carries this public contract field but never selects or changes it.
+    filter_execution_boundary: Optional[str] = None
     integration_category: Optional[str] = None
     channel_type: Optional[str] = None
     channel_provider_key: Optional[str] = None
@@ -186,6 +189,23 @@ class ServiceAccountConfig:
                 "integration_type must be 'agent', 'mcp', 'channel', "
                 "'model', 'ml_filter', or 'workflow_runtime'"
             )
+        normalized_filter_boundary = (
+            str(self.filter_execution_boundary or "").strip().lower() or None
+        )
+        if self.integration_type == "ml_filter":
+            if normalized_filter_boundary not in {
+                "model_boundary",
+                "tool_response",
+                "egress",
+            }:
+                raise ValueError(
+                    "filter_execution_boundary is required for connected ml_filter service accounts"
+                )
+        elif normalized_filter_boundary is not None:
+            raise ValueError(
+                "filter_execution_boundary is valid only for connected ml_filter service accounts"
+            )
+        self.filter_execution_boundary = normalized_filter_boundary
         self.control_source = str(self.control_source or "").strip().lower()
         if self.control_source not in {"cluster_directive", "local_manifest"}:
             raise ValueError(
