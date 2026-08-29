@@ -23,7 +23,12 @@ from atellagent_client.sdk.config import load_service_account_config_from_yaml
 
 from .agent import MCPAgentProxy, MCPAgentProxyError
 from .bridge_config import load_local_mcp_bridge_config
-from .contracts import MCPProxyTool, MCPToolResult, MCPVisibleTool, _ConfiguredMCPToolGateway
+from .contracts import (
+    MCPProxyTool,
+    MCPToolResult,
+    MCPVisibleTool,
+    _ConfiguredMCPToolGateway,
+)
 from .tool import MCPToolProxy, MCPToolTarget
 
 
@@ -34,7 +39,10 @@ def _object(value: Any, label: str) -> Mapping[str, Any]:
 
 
 def _read_agent_proxy_config(path: str) -> tuple[str, str | None, list[MCPProxyTool]]:
-    document = _object(yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}, "agent proxy configuration")
+    document = _object(
+        yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {},
+        "agent proxy configuration",
+    )
     client_config = str(document.get("client_config") or "").strip()
     if not client_config:
         raise ValueError("client_config is required")
@@ -62,7 +70,11 @@ async def _run_agent_proxy(config_path: str) -> int:
     client_config_path, source_agent, tools = _read_agent_proxy_config(config_path)
     client = AtellagentClient(load_service_account_config_from_yaml(client_config_path))
     proxy = MCPAgentProxy(
-        gateway=_ConfiguredMCPToolGateway(client=client, tools=tools, source_agent=source_agent)
+        gateway=_ConfiguredMCPToolGateway(
+            client=client,
+            tools=tools,
+            source_agent=source_agent,
+        )
     )
     try:
         for line in sys.stdin:

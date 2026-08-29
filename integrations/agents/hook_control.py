@@ -11,6 +11,7 @@ processes only receive safe allow/deny results and never receive credentials.
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from dataclasses import dataclass
 import json
 import os
@@ -211,10 +212,8 @@ class HookControlRuntime:
             return
         finally:
             writer.close()
-            try:
+            with suppress(Exception):
                 await writer.wait_closed()
-            except Exception:
-                pass
 
     async def _response_for(self, line: bytes) -> Dict[str, Any]:
         request_id: Any = None

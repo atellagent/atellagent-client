@@ -17,6 +17,7 @@ from atellagent_client.sdk.errors import PolicyTransportError, PolicyViolationEr
 
 HOOK_CONTROL_PROTOCOL = "atellagent.hook-control.v1"
 MAX_REQUEST_BYTES = 64 * 1024
+MAX_RESPONSE_BYTES = 1024 * 1024
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$")
 
 
@@ -82,7 +83,15 @@ class HookControlClient:
     async def call(self, method: str, params: Mapping[str, Any]) -> Dict[str, Any]:
         request = {"protocol_version": HOOK_CONTROL_PROTOCOL, "id": "hook-request", "method": str(method or "").strip(), "params": dict(params)}
         try:
-            reader, writer = await asyncio.wait_for(asyncio.open_unix_connection(self.socket_path), timeout=self.timeout_seconds)
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_unix_connection(
+                    self.socket_path,
+                    # StreamReader defaults to 64 KiB, which is smaller than
+                    # the hook-control protocol's permitted response frame.
+                    limit=MAX_RESPONSE_BYTES + 1,
+                ),
+                timeout=self.timeout_seconds,
+            )
             writer.write(json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n")
             await asyncio.wait_for(writer.drain(), timeout=self.timeout_seconds)
             line = await asyncio.wait_for(reader.readline(), timeout=self.timeout_seconds)
@@ -90,7 +99,7 @@ class HookControlClient:
             await writer.wait_closed()
         except Exception as exc:
             raise HookControlError("control_unavailable") from exc
-        if not line or len(line) > MAX_REQUEST_BYTES:
+        if not line or len(line) > MAX_RESPONSE_BYTES:
             raise HookControlError("control_unavailable")
         try:
             response = json.loads(line)
@@ -108,4 +117,4 @@ class HookControlClient:
         return dict(result)
 
 
-__all__ = ["HOOK_CONTROL_PROTOCOL", "MAX_REQUEST_BYTES", "HookControlClient", "HookControlError", "identifier", "messages", "object_fields", "safe_error_code"]
+__all__ = ["HOOK_CONTROL_PROTOCOL", "MAX_REQUEST_BYTES", "MAX_RESPONSE_BYTES", "HookControlClient", "HookControlError", "identifier", "messages", "object_fields", "safe_error_code"]

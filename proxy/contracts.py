@@ -25,6 +25,7 @@ class MCPVisibleTool:
     name: str
     description: str
     input_schema: Mapping[str, Any]
+
     def __post_init__(self) -> None:
         name = _required_text(self.name, field_name="name")
         schema = dict(self.input_schema or {})
@@ -33,7 +34,11 @@ class MCPVisibleTool:
         if not isinstance(schema.get("properties", {}), Mapping):
             raise ValueError("input_schema.properties must be an object")
         object.__setattr__(self, "name", name)
-        object.__setattr__(self, "description", _required_text(self.description, field_name="description"))
+        object.__setattr__(
+            self,
+            "description",
+            _required_text(self.description, field_name="description"),
+        )
         object.__setattr__(self, "input_schema", schema)
 
     def as_mcp_tool(self) -> dict[str, Any]:
@@ -63,7 +68,6 @@ class MCPProxyTool(MCPVisibleTool):
             "target_tool_name",
             _required_text(self.target_tool_name, field_name="target_tool_name"),
         )
-
 @dataclass(frozen=True)
 class MCPToolResult:
     """A tool result safe to render on an MCP peer connection."""

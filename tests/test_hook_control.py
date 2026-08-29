@@ -195,7 +195,32 @@ class HookControlRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(health["unresolved_postflights"], 0)
         self.assertTrue(self.participant.started)
 
-    async def test_mcp_invocation_uses_only_the_runtime_owned_tool_map(self) -> None:
+    async def test_client_accepts_response_larger_than_default_stream_limit(self) -> None:
+        response = (
+            b'{"id":"hook-request","ok":true,"result":{"payload":"'
+            + (b"x" * (70 * 1024))
+            + b'"}}\n'
+        )
+        socket_path = str(Path(self.directory.name) / "large-response.sock")
+
+        async def respond(_reader, writer) -> None:
+            await _reader.readline()
+            writer.write(response)
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        server = await asyncio.start_unix_server(respond, path=socket_path)
+        self.addAsyncCleanup(self._close_server, server)
+        result = await HookControlClient(socket_path).call("health", {})
+        self.assertEqual(len(result["payload"]), 70 * 1024)
+
+    @staticmethod
+    async def _close_server(server) -> None:
+        server.close()
+        await server.wait_closed()
+
+    async def test_mcp_catalog_and_invocation_use_the_cluster_owned_assignment(self) -> None:
         await self.runtime.stop()
         with patch(
             "atellagent_client.integrations.agents.hook_control.ExternalAgentGovernance",
@@ -207,6 +232,9 @@ class HookControlRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 participant=self.participant,  # type: ignore[arg-type]
             )
         await self.runtime.start()
+        catalog = await self.client.call("mcp.list", {})
+        self.assertEqual(catalog["tools"][0]["name"], "lookup")
+        self.assertNotIn("target_binding", catalog["tools"][0])
         result = await self.client.call(
             "mcp.invoke",
             {

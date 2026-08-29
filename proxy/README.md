@@ -20,9 +20,8 @@ atellagent-mcp-bridge --config bridge.yaml
 ```
 
 `atellagent-mcp-bridge` requires a local-proxy configuration with an absolute
-`control_socket`. Start the enrolled `agent.control` runtime with the same
-configuration through `--mcp-bridge-config`; it fetches the assigned catalog
-and owns the exact tool-to-target map.
+`control_socket`. Start the enrolled `agent.control` runtime on that socket;
+it fetches the assigned catalog and owns the exact tool-to-target map.
 The bridge itself holds no service-account credentials, target API key, OAuth
 client secret, or refresh token. Atellagent owns the policy decision and, when
 it manages the external target, the credentialed outbound call. MCP result

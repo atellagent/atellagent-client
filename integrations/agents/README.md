@@ -19,10 +19,10 @@ atellagent-cli ./hook-control.yaml \
   --hook-control-socket /run/user/<uid>/atellagent/control.sock
 ```
 
-For a local Codex MCP bridge, add
-`--mcp-bridge-config ./bridge.yaml`. That file contains the same absolute
-socket path. The stdio bridge is credential-free; this runtime uses its enrolled
-service-account session to fetch the assigned tool catalog. Start from
+For a local Codex MCP bridge, run
+`atellagent-mcp-bridge --config ./bridge.yaml`. That file contains the same
+absolute socket path. The stdio bridge is credential-free; this runtime uses its
+enrolled service-account session to fetch the assigned tool catalog. Start from
 [`examples/config/local-mcp-bridge.yaml`](../../examples/config/local-mcp-bridge.yaml),
 not `tool-proxy.yaml`, which is for a separately enrolled customer-MCP boundary.
 
