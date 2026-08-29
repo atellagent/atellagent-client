@@ -18,6 +18,7 @@ from atellagent_client.integrations.agents.hook_control import (
     HookControlError,
     HookControlRuntime,
 )
+from atellagent_client.proxy import MCPProxyTool
 from atellagent_client.sdk.errors import PolicyViolationError
 from atellagent_client.governance import ActionDenied
 from atellagent_client.protocol.agent_contracts import GovernanceReceipt, ModelDecision
@@ -72,6 +73,7 @@ class _Governance:
         self.preflights = []
         self.postflights = []
         self.postflight_failures = 0
+        self.mcp_calls = []
         self.decision_delay_seconds = 0.0
         self.model = ModelDecision(
             outcome="allow",
@@ -114,6 +116,16 @@ class _Governance:
         if self.postflight_failures:
             self.postflight_failures -= 1
             raise RuntimeError("temporary postflight failure")
+
+    async def mcp_communicate_async(self, **kwargs):
+        self.mcp_calls.append(kwargs)
+        return {
+            "response": {
+                "mcp_result": {
+                    "content": [{"type": "text", "text": "record"}],
+                }
+            }
+        }
 
 
 class HookControlRuntimeTests(unittest.IsolatedAsyncioTestCase):
@@ -169,6 +181,48 @@ class HookControlRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(health["capabilities"], ["agent.control"])
         self.assertEqual(health["unresolved_postflights"], 0)
         self.assertTrue(self.participant.started)
+
+    async def test_mcp_invocation_uses_only_the_runtime_owned_tool_map(self) -> None:
+        await self.runtime.stop()
+        with patch(
+            "atellagent_client.integrations.agents.hook_control.ExternalAgentGovernance",
+            return_value=self.governance,
+        ):
+            self.runtime = HookControlRuntime(
+                self.config,
+                socket_path=self.socket_path,
+                participant=self.participant,  # type: ignore[arg-type]
+                mcp_tools=(
+                    MCPProxyTool(
+                        name="lookup",
+                        description="Look up a record.",
+                        input_schema={"type": "object", "properties": {}},
+                        target_binding="external-resource-id",
+                        target_tool_name="provider_lookup",
+                    ),
+                ),
+            )
+        await self.runtime.start()
+        result = await self.client.call(
+            "mcp.invoke",
+            {
+                "tool_name": "lookup",
+                "arguments": {"record_id": "demo-001"},
+                "tool_call_id": "mcp-call-1",
+            },
+        )
+        self.assertEqual(result["content"][0]["text"], "record")
+        self.assertEqual(self.governance.mcp_calls[0]["target_binding"], "external-resource-id")
+        self.assertEqual(self.governance.mcp_calls[0]["tool_name"], "provider_lookup")
+        with self.assertRaisesRegex(HookControlError, "mcp_tool_not_configured"):
+            await self.client.call(
+                "mcp.invoke",
+                {
+                    "tool_name": "unconfigured",
+                    "arguments": {},
+                    "tool_call_id": "mcp-call-2",
+                },
+            )
 
     async def test_turn_entry_decision_never_synthesizes_provider_facts(self) -> None:
         result = await self.client.call(
@@ -248,6 +302,7 @@ class HookControlRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "tool_call_id": "tool-1",
             "tool_name": "shell.execute",
             "arguments": {"command": "pwd"},
+            "adapter_version": "atellagent.host-hooks.v1",
         }
         result = await self.client.call("action.preflight", params)
         self.assertTrue(result["allowed"])
@@ -262,6 +317,7 @@ class HookControlRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "tool_call_id": "tool-directive-failure",
             "tool_name": "shell.execute",
             "arguments": {"command": "pwd"},
+            "adapter_version": "atellagent.host-hooks.v1",
         }
         self.governance.action_gate.failure_code = "remote_directive_invalid"
         with self.assertRaisesRegex(HookControlError, "remote_directive_invalid"):
@@ -281,6 +337,7 @@ class HookControlRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "tool_call_id": "tool-policy-denied",
             "tool_name": "shell.execute",
             "arguments": {"command": "pwd"},
+            "adapter_version": "atellagent.host-hooks.v1",
         }
         self.governance.preflight_async = AsyncMock(
             side_effect=PolicyViolationError("blocked", "opa_policy")
@@ -296,6 +353,7 @@ class HookControlRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "tool_call_id": "tool-1",
             "tool_name": "file.read",
             "arguments": {"path": "/workspace/a"},
+            "adapter_version": "atellagent.host-hooks.v1",
         }
         second = {**first, "tool_call_id": "tool-2"}
         await asyncio.gather(
@@ -341,6 +399,7 @@ class HookControlRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "tool_call_id": "tool-unresolved",
             "tool_name": "file.write",
             "arguments": {"path": "/workspace/result"},
+            "adapter_version": "atellagent.host-hooks.v1",
         }
         await self.client.call("action.preflight", preflight)
         postflight = {

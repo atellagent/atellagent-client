@@ -142,7 +142,7 @@ class BoundaryBootstrapRequest:
 
 @dataclass(frozen=True)
 class BoundaryBootstrapResponse:
-    success: bool = False
+    success: Optional[bool] = None
     workflow_context: Dict[str, Any] = field(default_factory=dict)
     principal_created: bool = False
     binding_created: bool = False
@@ -267,7 +267,7 @@ class BoundaryPostflightRequest:
     intent: Dict[str, Any] = field(default_factory=dict)
     resource: Dict[str, Any] = field(default_factory=dict)
     result_payload: Any = None
-    success: bool = False
+    success: Optional[bool] = None
     error_message: Optional[str] = None
     error_type: Optional[str] = None
     evidence: Dict[str, Any] = field(default_factory=dict)
@@ -280,7 +280,7 @@ class BoundaryPostflightRequest:
         context: GovernanceCallContext,
         receipt: GovernanceReceipt,
         result_payload: Any,
-        success: bool,
+        success: Optional[bool],
         error_message: Optional[str] = None,
         error_type: Optional[str] = None,
         evidence: Optional[Dict[str, Any]] = None,
@@ -304,7 +304,7 @@ class BoundaryPostflightRequest:
                 resource if resource is not None else context.resource
             ),
             result_payload=result_payload,
-            success=bool(success),
+            success=success,
             error_message=normalize_optional_text(error_message),
             error_type=normalize_optional_text(error_type),
             evidence={
@@ -328,7 +328,7 @@ class BoundaryPostflightRequest:
             "intent": coerce_dict(self.intent) or None,
             "resource": coerce_dict(self.resource) or None,
             "result_payload": self.result_payload,
-            "success": bool(self.success),
+            "success": self.success,
             "error_message": normalize_optional_text(self.error_message),
             "error_type": normalize_optional_text(self.error_type),
             "evidence": coerce_dict(self.evidence),
@@ -351,7 +351,7 @@ class BoundaryPostflightRequest:
             "intent": coerce_dict(self.intent),
             "resource": coerce_dict(self.resource) or None,
             "result_payload": self.result_payload,
-            "success": bool(self.success),
+            "success": self.success,
             "error_message": normalize_optional_text(self.error_message),
             "error_type": normalize_optional_text(self.error_type),
             "evidence": coerce_dict(self.evidence),
@@ -382,7 +382,7 @@ def build_postflight_payload(
     context: GovernanceCallContext,
     receipt: GovernanceReceipt,
     result_payload: Any,
-    success: bool,
+    success: Optional[bool],
     error_message: Optional[str] = None,
     error_type: Optional[str] = None,
     evidence: Optional[Dict[str, Any]] = None,

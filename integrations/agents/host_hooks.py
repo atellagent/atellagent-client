@@ -31,6 +31,7 @@ _UNAVAILABLE_REASON = "Atellagent control is unavailable; request denied."
 _MAX_STDIN_BYTES = 64 * 1024
 _HOST_NAMES = {"claude-code", "codex", "gemini-cli"}
 _ATELLAGENT_MCP_PREFIX = "mcp__atellagent__"
+HOST_HOOK_ADAPTER_VERSION = "atellagent.host-hooks.v1"
 
 
 @dataclass(frozen=True)
@@ -63,7 +64,7 @@ def host_hook_capabilities() -> dict[str, Any]:
                 "events": {
                     "UserPromptSubmit": "turn_entry",
                     "PreToolUse": "preflight",
-                    "PostToolUse": "postflight_success",
+                    "PostToolUse": "postflight_result",
                 },
                 "exclusions": [
                     "mcp__atellagent__* (effect-boundary MCP PEP)",
@@ -107,9 +108,6 @@ def _turn_id(host: str, event: Mapping[str, Any], *, fallback: str) -> str:
     supplied = event.get("turn_id")
     if isinstance(supplied, str) and supplied.strip():
         return supplied.strip()
-    # Claude Code's hook schema does not provide a turn ID for every event.
-    # A deterministic, bounded correlation value adds no authority and keeps
-    # preflight/postflight pairing stable for one host-provided event identity.
     material = f"{host}:{_string(event, 'session_id')}:{fallback}".encode("utf-8")
     return f"hook-{sha256(material).hexdigest()}"
 
@@ -162,7 +160,6 @@ def _pretool_result(host: str, allowed: bool) -> HookAdapterResponse:
             exit_code=0,
             stdout=_json({"decision": "deny", "reason": _DENIED_REASON}),
         )
-    # Both supported host command-hook schemas use this documented shape.
     output: dict[str, Any] = {
         "hookEventName": "PreToolUse",
         "permissionDecision": "allow" if allowed else "deny",
@@ -199,17 +196,10 @@ async def _handle_gemini_before_model(
         if not isinstance(message, Mapping):
             raise ValueError("invalid hook input")
         normalized = dict(message)
-        # Gemini's stable hook contract calls an assistant message "model";
-        # the portable Atellagent request contract calls the same role
-        # "assistant". No content is changed by this adapter translation.
         if normalized.get("role") == "model":
             normalized["role"] = "assistant"
         messages.append(normalized)
-    provider_request = {
-        key: request[key]
-        for key in ("config", "toolConfig")
-        if key in request
-    }
+    provider_request = {key: request[key] for key in ("config", "toolConfig") if key in request}
     turn_id = _gemini_turn_id(event, fallback=json.dumps(messages, sort_keys=True, separators=(",", ":")))
     result = await _call(
         socket_path,
@@ -251,6 +241,7 @@ async def _handle_gemini_before_tool(
             "tool_call_id": tool_call_id,
             "tool_name": tool_name,
             "arguments": dict(arguments),
+            "adapter_version": HOST_HOOK_ADAPTER_VERSION,
             "postflight_required": False,
         },
     )
@@ -299,6 +290,8 @@ async def _handle_pretool(host: str, socket_path: str, event: Mapping[str, Any])
             "tool_call_id": tool_call_id,
             "tool_name": tool_name,
             "arguments": _arguments(event.get("tool_input")),
+            "adapter_version": HOST_HOOK_ADAPTER_VERSION,
+            "postflight_required": host != "gemini-cli",
         },
     )
     return _pretool_result(host, _allowed(result))
@@ -309,17 +302,20 @@ async def _handle_posttool(host: str, socket_path: str, event: Mapping[str, Any]
     session_id, turn_id, tool_call_id, tool_name = _tool_fields(host, event)
     if _is_atellagent_mcp_facade(tool_name):
         return HookAdapterResponse(exit_code=0)
-    success = event_name == "PostToolUse"
     params: dict[str, Any] = {
         "host": host.replace("-", "_"),
         "session_id": session_id,
         "turn_id": turn_id,
         "tool_call_id": tool_call_id,
-        "success": success,
+        "success": event_name == "PostToolUse",
     }
-    if success:
+    if host == "codex":
+        params["success"] = None
+        params["outcome_observation"] = "result_observed"
         params["result_payload"] = event.get("tool_response")
-    else:
+    elif params["success"]:
+        params["result_payload"] = event.get("tool_response")
+    elif params["success"] is False:
         params["error_message"] = str(event.get("error") or "host tool failure")
         params["error_type"] = "HostToolFailure"
     result = await _call(socket_path, "action.postflight", params)
@@ -349,7 +345,9 @@ async def handle_host_hook(
         if event_name == "PreToolUse":
             return await _handle_pretool(host, socket_path, event)
         if event_name in {"PostToolUse", "PostToolUseFailure"}:
-            if host != "claude-code" and event_name == "PostToolUseFailure":
+            if host == "codex" and event_name != "PostToolUse":
+                return _failure()
+            if host not in {"claude-code", "codex"}:
                 return _failure()
             return await _handle_posttool(host, socket_path, event)
         return _failure()

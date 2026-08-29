@@ -25,10 +25,11 @@ Claude Code and Codex `UserPromptSubmit` are governed as a `turn_entry` model
 decision: the request contains exactly the one submitted user prompt. It covers
 that prompt before the host processes it, not subsequent model requests.
 Gemini CLI `BeforeModel` is governed as a `full_model_request` decision because
-that documented hook supplies the
-outbound model request. `PreToolUse` is a synchronous preflight.
-`PostToolUse` records the correlated outcome; Claude Code also supplies
-`PostToolUseFailure`.
+that documented hook supplies the outbound model request. `PreToolUse` is a
+synchronous preflight. Claude Code records correlated success and failure
+outcomes through `PostToolUse` and `PostToolUseFailure`. Codex records a
+correlated tool result through `PostToolUse`; Codex does not provide a separate
+failure event.
 
 Calls to the `mcp__atellagent__*` facade deliberately skip host preflight and
 postflight because that facade is governed at its MCP effect boundary. Codex
@@ -64,7 +65,12 @@ never starts it, remains outside the adapter's control boundary.
 Add the TOML in `examples/config/codex-hooks.user.toml` to the user-level
 `~/.codex/config.toml` (or a trusted project configuration where appropriate).
 It uses synchronous command handlers for `UserPromptSubmit`, `PreToolUse`, and
-`PostToolUse`.
+`PostToolUse`. The template also sets `network.allow_unix_sockets` to the
+exact control-socket path. Codex command hooks run in a sandbox, so this
+scoped allowance is required for the credential-free adapter to reach its
+owner-private control service. Do not substitute a parent-directory allowance
+or a TCP listener. Fully restart Codex after changing hook, MCP-server, or
+socket-permission configuration.
 
 For managed deployment, place the corresponding block from
 `examples/config/codex-hooks.managed.toml` in the administrator-managed Codex

@@ -532,6 +532,7 @@ class ConnectedRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     heartbeat_json["certificate_public_key_sha256"], "a" * 64
                 )
                 self.assertIn("certificate_expires_at", heartbeat_json)
+                self.assertNotIn("native_hook_coverage_health", heartbeat_json)
                 self.assertIsNone(runtime.instance_id)
 
     async def test_http2_is_required_without_transport_fallback(self) -> None:

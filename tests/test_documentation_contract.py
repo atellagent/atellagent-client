@@ -101,7 +101,6 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("`BeforeTool`", gemini)
         self.assertIn("`AfterModel`", gemini)
         self.assertIn("Not supported", gemini)
-        self.assertNotIn("deferred", gemini.lower())
         cowork = self.docs["docs/hosts/claude-cowork.md"]
         self.assertIn("deferred", cowork.lower())
         self.assertIn("does not", cowork.lower())

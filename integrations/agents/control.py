@@ -33,6 +33,7 @@ from atellagent_client.sdk.client_modules.runtime_authority import (
     apply_runtime_authority_headers,
 )
 from atellagent_client.sdk.errors import AuthenticationError, PolicyViolationError
+from atellagent_client.sdk.operations import APIOperations
 from atellagent_client.governance import RuntimeActionGate
 from atellagent_client.sdk.operations_modules.common import extract_policy_detail
 
@@ -136,6 +137,33 @@ class ExternalAgentGovernance:
             apply_workflow_headers(headers, workflow_context=workflow_context)
         )
 
+    async def mcp_communicate_async(
+        self,
+        *,
+        target_binding: str,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        tool_call_id: str,
+    ) -> Dict[str, Any]:
+        """Invoke a governed MCP tool through this boundary's existing session."""
+
+        session, headers = await self._async_headers({})
+        operations = APIOperations(
+            self.config.gateway_url,
+            api_version=self.config.api_version,
+            contract_version=self.config.contract_version,
+        )
+        return await operations.mcp_communicate_async(
+            session,
+            headers,
+            str(self.config.service_account_id),
+            str(target_binding),
+            str(tool_name),
+            dict(arguments),
+            tool_call_id=tool_call_id,
+            action_context={"action_key": f"mcp-bridge-{tool_call_id}"},
+        )
+
     def _resolve_model_workflow_context_sync(
         self,
         *,
@@ -231,7 +259,7 @@ class ExternalAgentGovernance:
         *,
         receipt: GovernanceReceipt,
         result_payload: Any,
-        success: bool,
+        success: Optional[bool],
         error_message: Optional[str] = None,
         error_type: Optional[str] = None,
         evidence: Optional[Dict[str, Any]] = None,
@@ -255,7 +283,7 @@ class ExternalAgentGovernance:
         *,
         receipt: GovernanceReceipt,
         result_payload: Any,
-        success: bool,
+        success: Optional[bool],
         error_message: Optional[str] = None,
         error_type: Optional[str] = None,
         evidence: Optional[Dict[str, Any]] = None,

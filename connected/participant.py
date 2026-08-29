@@ -110,6 +110,8 @@ class ConnectedParticipant(ConnectedDeliveryMixin, ConnectedCertificateRotationM
         self.receive_wait_seconds = min(30, max(1, int(receive_wait_seconds)))
         self._semaphore = asyncio.Semaphore(max(1, int(max_concurrency)))
         self._instance_id: Optional[str] = None
+        self._native_hook_posture: Optional[str] = None
+        self._native_hook_observe_offline_permits = 0
         self._registration_lock = asyncio.Lock()
         self._stop_event = asyncio.Event()
         self._receive_enabled = asyncio.Event()
@@ -122,6 +124,20 @@ class ConnectedParticipant(ConnectedDeliveryMixin, ConnectedCertificateRotationM
     @property
     def instance_id(self) -> Optional[str]:
         return self._instance_id
+
+    @property
+    def native_hook_posture(self) -> Optional[str]:
+        return self._native_hook_posture
+
+    def set_native_hook_coverage_health(self, *, observe_offline_permits: int) -> None:
+        """Publish an aggregate local observe-outage count on the next heartbeat."""
+
+        if isinstance(observe_offline_permits, bool):
+            raise ValueError("observe_offline_permits must be an integer")
+        normalized = int(observe_offline_permits)
+        if normalized < 0 or normalized > 1_000_000:
+            raise ValueError("observe_offline_permits is outside the accepted range")
+        self._native_hook_observe_offline_permits = normalized
 
     async def enforce_local_action(
         self,
@@ -377,23 +393,42 @@ class ConnectedParticipant(ConnectedDeliveryMixin, ConnectedCertificateRotationM
                 await self._receive_enabled.wait()
                 await self._ensure_registered()
                 certificate = x509.load_pem_x509_certificate(Path(str(self.config.cert_path)).read_bytes())
+                heartbeat_payload = {
+                    "protocol_version": self.config.protocol_version,
+                    "capabilities": self.config.capabilities,
+                    "certificate_public_key_sha256": certificate_public_key_sha256(str(self.config.cert_path)),
+                    "certificate_expires_at": certificate.not_valid_after_utc.isoformat(),
+                }
+                # Native-hook coverage is optional telemetry, not part of a
+                # connected runtime's base liveness protocol. The gateway
+                # establishes whether this identity is a reviewed native host
+                # by returning a signed posture on an ordinary heartbeat.
+                if self._native_hook_posture:
+                    heartbeat_payload["native_hook_coverage_health"] = {
+                        "observe_offline_permits": self._native_hook_observe_offline_permits,
+                    }
                 response = await self._request(
                     "POST", self.config.heartbeat_path_template,
-                    json={
-                        "protocol_version": self.config.protocol_version,
-                        "capabilities": self.config.capabilities,
-                        "certificate_public_key_sha256": certificate_public_key_sha256(str(self.config.cert_path)),
-                        "certificate_expires_at": certificate.not_valid_after_utc.isoformat(),
-                    },
+                    json=heartbeat_payload,
                 )
                 payload = _strict_object(
-                    response.json(), {"instance_id", "presence_status", "heartbeat_at"}, "heartbeat response"
+                    response.json(),
+                    {"instance_id", "presence_status", "heartbeat_at", "native_hook_posture"},
+                    "heartbeat response",
                 )
                 if str(payload.get("instance_id")) != self._instance_id:
                     raise ConnectedProtocolError("heartbeat response binding mismatch")
+                posture = payload.get("native_hook_posture")
+                if posture is not None and not isinstance(posture, str):
+                    raise ConnectedProtocolError("native hook posture response is invalid")
+                if isinstance(posture, str) and posture.strip():
+                    self._native_hook_posture = posture.strip()
+                else:
+                    self._native_hook_posture = None
             except ConnectedHTTPError as exc:
                 if exc.status_code in {403, 404}:
                     self._instance_id = None
+                    self._native_hook_posture = None
                 logger.warning("connected heartbeat failed: %s", exc)
             except Exception:
                 logger.exception("connected heartbeat loop failed")

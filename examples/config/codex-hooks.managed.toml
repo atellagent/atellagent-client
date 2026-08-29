@@ -1,4 +1,9 @@
 # Place in the administrator-managed Codex configuration layer.
+[network]
+# Codex command hooks are sandboxed. Permit this exact owner-private socket;
+# do not allow its parent directory or replace it with a TCP listener.
+allow_unix_sockets = ["/run/user/<uid>/atellagent/control.sock"]
+
 [hooks]
 managed_dir = "/opt/atellagent/hooks"
 

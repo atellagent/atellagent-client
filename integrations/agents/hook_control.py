@@ -19,6 +19,8 @@ import re
 import stat
 from typing import Any, Dict, Mapping, Optional
 
+import httpx
+
 from atellagent_client.connected import ConnectedParticipant
 from atellagent_client.governance import ActionDenied
 from atellagent_client.protocol.agent_contracts import (
@@ -28,9 +30,12 @@ from atellagent_client.protocol.agent_contracts import (
 )
 from atellagent_client.sdk.config import ServiceAccountConfig
 from atellagent_client.sdk.errors import PolicyTransportError, PolicyViolationError
+from atellagent_client.proxy.contracts import MCPProxyTool
+from atellagent_client.sdk.client_modules.mcp_tools import _mcp_tool_result
 
 from .control import ExternalAgentGovernance
 from .hook_control_protocol import HookControlClient, HookControlError
+from .native_hook_posture import NativeHookPostureCache
 
 
 HOOK_CONTROL_PROTOCOL = "atellagent.hook-control.v1"
@@ -47,6 +52,8 @@ class _PendingAction:
     result_payload: Any = None
     error_message: Optional[str] = None
     error_type: Optional[str] = None
+    evidence: Optional[Dict[str, Any]] = None
+    postflight_received: bool = False
 
 
 def _identifier(value: Any, field_name: str) -> str:
@@ -103,7 +110,9 @@ class HookControlRuntime:
         *,
         socket_path: str,
         participant: Optional[ConnectedParticipant] = None,
+        mcp_tools: tuple[MCPProxyTool, ...] = (),
         rpc_timeout_seconds: float = 8.0,
+        mcp_rpc_timeout_seconds: float = 305.0,
         postflight_attempts: int = 3,
     ) -> None:
         if config.integration_type != "agent":
@@ -124,8 +133,16 @@ class HookControlRuntime:
             config,
             session_provider=lambda: self.participant.session,
         )
+        self._mcp_tools = {tool.name: tool for tool in mcp_tools}
+        if len(self._mcp_tools) != len(mcp_tools):
+            raise ValueError("hook control MCP tool names must be unique")
         self.rpc_timeout_seconds = max(0.1, float(rpc_timeout_seconds))
+        self.mcp_rpc_timeout_seconds = max(0.1, float(mcp_rpc_timeout_seconds))
         self.postflight_attempts = max(1, int(postflight_attempts))
+        self._posture_cache = NativeHookPostureCache(config)
+        self._last_posture_document: Optional[str] = None
+        self._observe_offline_permits = 0
+        self._offline_permits: set[str] = set()
         self._server: Optional[asyncio.AbstractServer] = None
         self._pending: Dict[str, _PendingAction] = {}
         self._reserving: set[str] = set()
@@ -221,9 +238,14 @@ class HookControlRuntime:
                 raise HookControlError("invalid_request_id")
             method = str(request.get("method") or "").strip()
             params = request.get("params")
+            timeout_seconds = (
+                self.mcp_rpc_timeout_seconds
+                if method == "mcp.invoke"
+                else self.rpc_timeout_seconds
+            )
             result = await asyncio.wait_for(
                 self._dispatch(method, params),
-                timeout=self.rpc_timeout_seconds,
+                timeout=timeout_seconds,
             )
             return {"id": request_id, "ok": True, "result": result}
         except asyncio.TimeoutError:
@@ -236,11 +258,13 @@ class HookControlRuntime:
             if raw_params not in ({}, None):
                 raise HookControlError("invalid_health_params")
             async with self._pending_lock:
-                unresolved = sum(1 for pending in self._pending.values() if pending.success is not None)
+                unresolved = len(self._pending)
             return {
                 "protocol_version": HOOK_CONTROL_PROTOCOL,
                 "capabilities": [_HOST_CAPABILITY],
                 "unresolved_postflights": unresolved,
+                "native_hook_posture": self._posture_cache.diagnostics(),
+                "observe_offline_permits": self._observe_offline_permits,
             }
         if method == "model.decision":
             return await self._model_decision(raw_params)
@@ -248,7 +272,35 @@ class HookControlRuntime:
             return await self._preflight(raw_params)
         if method == "action.postflight":
             return await self._postflight(raw_params)
+        if method == "mcp.invoke":
+            return await self._invoke_mcp(raw_params)
         raise HookControlError("unsupported_method")
+
+    async def _invoke_mcp(self, raw_params: Any) -> Dict[str, Any]:
+        params = _object(
+            raw_params,
+            "params",
+            allowed={"tool_name", "arguments", "tool_call_id"},
+        )
+        tool_name = _identifier(params.get("tool_name"), "tool_name")
+        arguments = params.get("arguments")
+        if not isinstance(arguments, Mapping):
+            raise HookControlError("invalid_arguments")
+        tool_call_id = _identifier(params.get("tool_call_id"), "tool_call_id")
+        tool = self._mcp_tools.get(tool_name)
+        if tool is None:
+            raise HookControlError("mcp_tool_not_configured")
+        response = await self.governance.mcp_communicate_async(
+            target_binding=tool.target_binding,
+            tool_name=tool.target_tool_name,
+            arguments=dict(arguments),
+            tool_call_id=tool_call_id,
+        )
+        result = _mcp_tool_result(response)
+        return {
+            "content": result["content"],
+            "is_error": result.get("isError") is True,
+        }
 
     @staticmethod
     def _turn_fields(raw_params: Any, *, include_tool: bool) -> Dict[str, Any]:
@@ -321,7 +373,7 @@ class HookControlRuntime:
             "params",
             allowed={
                 "host", "session_id", "turn_id", "tool_call_id", "tool_name", "arguments",
-                "postflight_required",
+                "postflight_required", "adapter_version",
             },
         )
         fields = self._turn_fields(params, include_tool=True)
@@ -332,6 +384,7 @@ class HookControlRuntime:
         postflight_required = params.get("postflight_required", True)
         if not isinstance(postflight_required, bool):
             raise HookControlError("invalid_postflight_required")
+        adapter_version = _identifier(params.get("adapter_version"), "adapter_version")
         pending_key = self._pending_key(**fields)
         async with self._pending_lock:
             if pending_key in self._pending or pending_key in self._reserving:
@@ -349,9 +402,11 @@ class HookControlRuntime:
                 "host": fields["host"],
                 "session_id": fields["session_id"],
                 "turn_id": fields["turn_id"],
+                "adapter_version": adapter_version,
             },
         )
         try:
+            await self._refresh_native_hook_posture()
             receipt = await self.governance.preflight_async(context)
             if not receipt.is_executable:
                 raise HookControlError("policy_denied")
@@ -376,6 +431,7 @@ class HookControlRuntime:
                     encoded_directive=receipt.control_directive,
                     facts=context.arguments,
                     workflow_context=receipt.workflow_context,
+                    policy_decision_id=receipt.decision_id,
                 )
             except Exception:
                 failed = _PendingAction(
@@ -401,6 +457,29 @@ class HookControlRuntime:
                 "allowed": False,
                 "reason_code": str(exc.violation_type or "policy_denied"),
             }
+        except httpx.TransportError:
+            async with self._pending_lock:
+                self._reserving.discard(pending_key)
+                if self._posture_cache.posture and self._posture_cache.posture.permits_observe_outage(
+                    host=fields["host"], adapter_version=adapter_version
+                ):
+                    self._offline_permits.add(pending_key)
+                    self._observe_offline_permits += 1
+                    report_health = getattr(
+                        self.participant,
+                        "set_native_hook_coverage_health",
+                        None,
+                    )
+                    if callable(report_health):
+                        report_health(
+                            observe_offline_permits=self._observe_offline_permits
+                        )
+                    return {
+                        "allowed": True,
+                        "action_key": pending_key,
+                        "disposition": "observe_offline_permit",
+                    }
+            raise
         except Exception:
             async with self._pending_lock:
                 self._reserving.discard(pending_key)
@@ -418,28 +497,41 @@ class HookControlRuntime:
             "params",
             allowed={
                 "host", "session_id", "turn_id", "tool_call_id", "success",
-                "result_payload", "error_message", "error_type",
+                "result_payload", "error_message", "error_type", "outcome_observation",
             },
         )
         fields = self._turn_fields(params, include_tool=True)
-        if not isinstance(params.get("success"), bool):
+        success_value = params.get("success")
+        if success_value is not None and not isinstance(success_value, bool):
             raise HookControlError("invalid_success")
+        outcome_observation = str(params.get("outcome_observation") or "").strip()
+        if success_value is None and outcome_observation != "result_observed":
+            raise HookControlError("invalid_outcome_observation")
         pending_key = self._pending_key(**fields)
         async with self._pending_lock:
             pending = self._pending.get(pending_key)
             if pending is None:
+                if pending_key in self._offline_permits:
+                    self._offline_permits.discard(pending_key)
+                    return {"recorded": False, "reason_code": "observe_offline_permit"}
                 raise HookControlError("unknown_tool_call")
-            success = bool(params["success"])
-            if pending.success is not None and pending.success != success:
+            success = success_value
+            if pending.postflight_received and pending.success != success:
                 raise HookControlError("postflight_conflict")
-            if pending.success is None:
+            if not pending.postflight_received:
                 pending = _PendingAction(
                     context=pending.context,
                     receipt=pending.receipt,
                     success=success,
-                    result_payload=params.get("result_payload") if success else None,
+                    result_payload=params.get("result_payload") if success is not False else None,
                     error_message=str(params.get("error_message") or "").strip() or None,
                     error_type=str(params.get("error_type") or "").strip() or None,
+                    evidence=(
+                        {"outcome_observation": outcome_observation}
+                        if outcome_observation
+                        else None
+                    ),
+                    postflight_received=True,
                 )
                 self._pending[pending_key] = pending
         recorded = await self._deliver_postflight(pending_key, pending)
@@ -455,9 +547,10 @@ class HookControlRuntime:
                     pending.context,
                     receipt=pending.receipt,
                     result_payload=pending.result_payload,
-                    success=bool(pending.success),
+                    success=pending.success,
                     error_message=pending.error_message,
                     error_type=pending.error_type,
+                    evidence=pending.evidence,
                 )
             except Exception:
                 if attempt + 1 < self.postflight_attempts:
@@ -468,6 +561,13 @@ class HookControlRuntime:
                 self._pending.pop(pending_key, None)
             return True
         return False  # pragma: no cover - non-empty attempt invariant
+
+    async def _refresh_native_hook_posture(self) -> None:
+        document = getattr(self.participant, "native_hook_posture", None)
+        if not document or document == self._last_posture_document:
+            return
+        await self._posture_cache.refresh(document)
+        self._last_posture_document = document
 
 
 __all__ = [

@@ -9,7 +9,7 @@
     },
     "codex": {
       "transport": "command",
-      "events": {"UserPromptSubmit": "turn_entry", "PreToolUse": "preflight", "PostToolUse": "postflight_success"},
+      "events": {"UserPromptSubmit": "turn_entry", "PreToolUse": "preflight", "PostToolUse": "postflight_result"},
       "exclusions": ["mcp__atellagent__* (effect-boundary MCP PEP)", "hosted or specialized tool paths outside documented command hooks"]
     },
     "gemini-cli": {

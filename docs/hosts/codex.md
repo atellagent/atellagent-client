@@ -8,7 +8,7 @@ template in [the host setup guide](../HOST_HOOKS.md).
 | --- | --- | --- |
 | `UserPromptSubmit` | `turn_entry` only | A denial blocks the submitted prompt before Codex processes it. |
 | Pre-tool `PreToolUse` | Documented command-hook tool calls | A structured deny prevents the tool invocation. |
-| `PostToolUse` | Correlated successful tool calls | Outcome recording. |
+| `PostToolUse` | Correlated tool results | Outcome recording; Codex provides no separate post-tool failure event. |
 | Subsequent model requests | Not observed | No `full_model_request` claim. |
 | Route mode | Not provided by this adapter | Use a provider session where you own transport. |
 | Subscription preservation | Yes | Decision mode leaves native Codex transport in place. |
