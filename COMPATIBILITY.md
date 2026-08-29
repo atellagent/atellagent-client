@@ -22,3 +22,12 @@ Provider-native tool adapters are available for OpenAI, Google, and Anthropic.
 The current release supports CPython 3.11 only. A Python version is added to
 the supported range only after its dependency lock, package build, complete
 test suite, Docker smoke test, and documented examples pass in CI.
+
+## Portable image
+
+The portable image supports `linux/amd64` and `linux/arm64` manifests for the
+documented core client runtime. A release digest is immutable; deploy and roll
+back by digest. Mutable image tags are convenience aliases and are not a
+compatibility or production-pinning contract. Customer provider SDKs, adapters,
+and handlers belong in a customer-derived image pinned to the public base
+digest.

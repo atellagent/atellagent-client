@@ -1,0 +1,69 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/atellagent/atellagent-client/security/vex/python-3.11.16.openvex.json",
+  "author": "Atellagent",
+  "version": 1,
+  "timestamp": "2026-08-16T00:00:00Z",
+  "statements": [
+    {
+      "vulnerability": {"name": "CVE-2026-7210"},
+      "products": [{"@id": "atellagent-client:scan", "subcomponents": [{"@id": "pkg:generic/python@3.11.16"}]}],
+      "status": "fixed",
+      "timestamp": "2026-08-16T00:00:00Z"
+    },
+    {
+      "vulnerability": {"name": "CVE-2026-11940"},
+      "products": [{"@id": "atellagent-client:scan", "subcomponents": [{"@id": "pkg:generic/python@3.11.16"}]}],
+      "status": "fixed",
+      "timestamp": "2026-08-16T00:00:00Z"
+    },
+    {
+      "vulnerability": {"name": "CVE-2026-15308"},
+      "products": [{"@id": "atellagent-client:scan", "subcomponents": [{"@id": "pkg:generic/python@3.11.16"}]}],
+      "status": "fixed",
+      "timestamp": "2026-08-16T00:00:00Z"
+    },
+    {
+      "vulnerability": {"name": "CVE-2026-6100"},
+      "products": [{"@id": "atellagent-client:scan", "subcomponents": [{"@id": "pkg:generic/python@3.11.16"}]}],
+      "status": "fixed",
+      "timestamp": "2026-08-16T00:00:00Z"
+    },
+    {
+      "vulnerability": {"name": "CVE-2026-4224"},
+      "products": [{"@id": "atellagent-client:scan", "subcomponents": [{"@id": "pkg:generic/python@3.11.16"}]}],
+      "status": "fixed",
+      "timestamp": "2026-08-16T00:00:00Z"
+    },
+    {
+      "vulnerability": {"name": "CVE-2026-11972"},
+      "products": [{"@id": "atellagent-client:scan", "subcomponents": [{"@id": "pkg:generic/python@3.11.16"}]}],
+      "status": "fixed",
+      "timestamp": "2026-08-16T00:00:00Z"
+    },
+    {
+      "vulnerability": {"name": "CVE-2026-3644"},
+      "products": [{"@id": "atellagent-client:scan", "subcomponents": [{"@id": "pkg:generic/python@3.11.16"}]}],
+      "status": "fixed",
+      "timestamp": "2026-08-16T00:00:00Z"
+    },
+    {
+      "vulnerability": {"name": "CVE-2026-9669"},
+      "products": [{"@id": "atellagent-client:scan", "subcomponents": [{"@id": "pkg:generic/python@3.11.16"}]}],
+      "status": "fixed",
+      "timestamp": "2026-08-16T00:00:00Z"
+    },
+    {
+      "vulnerability": {"name": "CVE-2026-3298"},
+      "products": [{"@id": "atellagent-client:scan", "subcomponents": [{"@id": "pkg:generic/python@3.11.16"}]}],
+      "status": "fixed",
+      "timestamp": "2026-08-16T00:00:00Z"
+    },
+    {
+      "vulnerability": {"name": "CVE-2026-4786"},
+      "products": [{"@id": "atellagent-client:scan", "subcomponents": [{"@id": "pkg:generic/python@3.11.16"}]}],
+      "status": "fixed",
+      "timestamp": "2026-08-16T00:00:00Z"
+    }
+  ]
+}

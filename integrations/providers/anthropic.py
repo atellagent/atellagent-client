@@ -10,9 +10,8 @@ endpoint; the bridge routes each block through Atellagent's governed ingress.
 
 from __future__ import annotations
 
-import inspect
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Mapping
+from typing import Any, Dict, Mapping
 
 from atellagent_client.integrations.agents.capabilities import ProviderCapabilitySet
 
@@ -27,7 +26,7 @@ ANTHROPIC_CAPABILITIES = ProviderCapabilitySet(
         "governed tool-use ingress",
         "governed tool-result publication",
     ),
-    model_checkpoint_aware=(),
+    model_checkpoint_aware=("GovernedProviderSession decision transport",),
     session_state_aware=(),
     notes=(
         "Anthropic receives native Messages API tools only. Atellagent owns "
@@ -49,16 +48,6 @@ def _mapping(value: Any) -> Dict[str, Any]:
             if isinstance(candidate, Mapping):
                 return dict(candidate)
     return {}
-
-
-def _items(value: Any) -> list[Dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    return [_mapping(item) for item in value]
-
-
-async def _await_provider_result(value: Any) -> Any:
-    return await value if inspect.isawaitable(value) else value
 
 
 @dataclass(frozen=True)
@@ -93,62 +82,6 @@ class AtellagentAnthropicToolBridge:
             "tool_use_id": call_id,
             "content": output,
         }
-
-    async def run_tool_loop(
-        self,
-        *,
-        create_message: Callable[..., Awaitable[Any] | Any],
-        request: Mapping[str, Any],
-        max_turns: int = 16,
-    ) -> Any:
-        """Run Messages API turns while dispatching tool use only via Atellagent."""
-        if max_turns < 1:
-            raise ValueError("max_turns must be at least 1")
-        request_payload = dict(request)
-        request_payload["tools"] = self.tool_definitions()
-        messages = list(request_payload.get("messages") or [])
-        request_payload["messages"] = messages
-        response = await _await_provider_result(create_message(**request_payload))
-        for _turn in range(max_turns):
-            response_data = _mapping(response)
-            content = _items(response_data.get("content"))
-            calls = [item for item in content if item.get("type") == "tool_use"]
-            if not calls:
-                return response
-            results = [await self.execute_tool_use(call) for call in calls]
-            messages = [
-                *messages,
-                {"role": "assistant", "content": content},
-                {"role": "user", "content": results},
-            ]
-            request_payload["messages"] = messages
-            response = await _await_provider_result(create_message(**request_payload))
-        raise RuntimeError("Anthropic provider tool loop exceeded max_turns")
-
-    async def run_with_client(
-        self,
-        *,
-        client: Any,
-        request: Mapping[str, Any],
-        max_turns: int = 16,
-    ) -> Any:
-        """Run the loop with an official Anthropic SDK client."""
-        try:
-            import anthropic  # noqa: F401 - verifies the declared integration extra
-        except ImportError as exc:  # pragma: no cover - installation boundary
-            raise RuntimeError(
-                "Anthropic support requires: pip install 'atellagent-client[anthropic]'"
-            ) from exc
-        messages = getattr(client, "messages", None)
-        create_message = getattr(messages, "create", None)
-        if not callable(create_message):
-            raise TypeError("client must be an Anthropic SDK client with messages.create")
-        return await self.run_tool_loop(
-            create_message=create_message,
-            request=request,
-            max_turns=max_turns,
-        )
-
 
 def tool_bridge(*, ingress: GovernedToolIngress) -> AtellagentAnthropicToolBridge:
     return AtellagentAnthropicToolBridge(ingress=ingress)

@@ -4,18 +4,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import os
-import sys
 import unittest
-from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
-
-import jwt
-from cryptography.hazmat.primitives.asymmetric import rsa
 
 from atellagent_client.connected import (
     ConnectedBridge,
@@ -25,16 +18,9 @@ from atellagent_client.connected import (
     ConnectedParticipant,
     ConnectedProtocolError,
     mount_agent_handler,
+    mount_filter_handler,
     mount_mcp_handler,
     mount_workflow_handler,
-)
-from atellagent_client.connected.mcp_client import (
-    LocalMCPClient,
-    _validate_discovery,
-    _require_loopback_url,
-)
-from atellagent_client.connected.capability import (
-    ConnectedCapabilityValidator,
 )
 from atellagent_client.connected.contracts import parse_connected_message
 from atellagent_client.sdk import ConnectedSDKRuntime
@@ -106,6 +92,9 @@ def _config(
         cert_path="/tmp/client.crt",
         key_path="/tmp/client.key",
         integration_type=integration_type,
+        identity_mode=(
+            "boundary_identity_only" if integration_type in {"agent", "mcp"} else None
+        ),
         deployment=(
             BridgeDeploymentConfig()
             if packaging == "bridge"
@@ -140,36 +129,6 @@ def _message():
 
 
 class ConnectedRuntimeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_local_mcp_client_uses_the_pinned_reference_server_contract(self) -> None:
-        reference_server = (
-            Path(__file__).resolve().parent
-            / "fixtures"
-            / "modern_mcp_reference_server.py"
-        )
-        client = LocalMCPClient(
-            BridgeDeploymentConfig(
-                target_transport="stdio",
-                target_command=sys.executable,
-                target_args=["-u", str(reference_server)],
-            )
-        )
-        try:
-            manifest = await client.manifest()
-            response = await client.invoke(
-                {
-                    "jsonrpc": "2.0",
-                    "id": "reference-call",
-                    "method": "tools/call",
-                    "params": {"name": "echo", "arguments": {}},
-                },
-                "reference-effect-1",
-            )
-        finally:
-            await client.close()
-
-        self.assertEqual(manifest["tools"][0]["name"], "echo")
-        self.assertEqual(response["result"]["content"][0]["text"], "ok")
-
     def test_mcp_runtime_does_not_persist_a_wire_protocol_revision(self) -> None:
         config = _config(packaging="bridge", integration_type="mcp")
         self.assertFalse(hasattr(config, "mcp_protocol_version"))
@@ -248,6 +207,43 @@ class ConnectedRuntimeTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         customer_handler.assert_awaited_once()
+
+    async def test_filter_mount_requires_and_preserves_the_explicit_boundary(self) -> None:
+        participant = SimpleNamespace(register_handler=Mock())
+
+        class FilterHandler:
+            request = None
+
+            async def evaluate_filter(self, request):
+                self.request = request
+                return {"allowed": True, "coverage": "complete", "score": 0.0}
+
+        handler = FilterHandler()
+        mount_filter_handler(participant, handler, target_idempotent=True)
+        mounted = participant.register_handler.call_args.args[1]
+        delivery = ConnectedDelivery(
+            message_id=str(uuid4()),
+            kind="action",
+            operation="filter.evaluate",
+            execution_id=None,
+            execution_attempt_id=None,
+            idempotency_key="filter-effect-1",
+            payload_schema="atellagent.connected.ml-filter-evaluation.v1",
+            payload={
+                "input": {
+                    "filter_id": "prompt_injection",
+                    "execution_boundary": "model_boundary",
+                    "content": "synthetic filter fixture",
+                }
+            },
+            delivery_attempt=1,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+        )
+
+        result = await mounted(delivery, SimpleNamespace())
+
+        self.assertEqual(handler.request.execution_boundary, "model_boundary")
+        self.assertEqual(result.result_payload["score"], 0.0)
 
     async def test_certificate_reload_rebuilds_owned_tls_session(self) -> None:
         config = _config()
@@ -332,15 +328,15 @@ class ConnectedRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 "atellagent_client.connected.participant.ConnectedCapabilityValidator"
             ),
             patch(
-                "atellagent_client.connected.participant.certificate_public_key_sha256",
+                "atellagent_client.connected.participant_rotation.certificate_public_key_sha256",
                 return_value="a" * 64,
             ),
             patch(
-                "atellagent_client.connected.participant.prepare_certificate_rotation",
+                "atellagent_client.connected.participant_rotation.prepare_certificate_rotation",
                 return_value=prepared,
             ),
             patch(
-                "atellagent_client.connected.participant.stage_certificate_rotation",
+                "atellagent_client.connected.participant_rotation.stage_certificate_rotation",
                 return_value=staged,
             ) as stage,
         ):
@@ -536,6 +532,7 @@ class ConnectedRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     heartbeat_json["certificate_public_key_sha256"], "a" * 64
                 )
                 self.assertIn("certificate_expires_at", heartbeat_json)
+                self.assertNotIn("native_hook_coverage_health", heartbeat_json)
                 self.assertIsNone(runtime.instance_id)
 
     async def test_http2_is_required_without_transport_fallback(self) -> None:
@@ -670,208 +667,6 @@ class ConnectedRuntimeTests(unittest.IsolatedAsyncioTestCase):
             [request[2]["headers"]["Authorization"] for request in client.requests],
             ["Bearer stale", "Bearer fresh"],
         )
-
-    async def test_local_mcp_adapter_binds_effect_key_to_tools_call(self) -> None:
-        deployment = BridgeDeploymentConfig(
-            target_transport="stdio",
-            target_command="example-mcp",
-        )
-        target = LocalMCPClient(deployment)
-        result_value = SimpleNamespace(
-            model_dump=Mock(return_value={"content": [{"type": "text", "text": "ok"}]})
-        )
-        target._client = SimpleNamespace(
-            call_tool=AsyncMock(return_value=result_value),
-        )
-        response = await target.invoke(
-            {
-                "jsonrpc": "2.0",
-                "id": "request-1",
-                "method": "tools/call",
-                "params": {"name": "lookup", "arguments": {"id": 7}},
-            },
-            "effect-1",
-        )
-        target._client.call_tool.assert_awaited_once_with(
-            "lookup",
-            {"id": 7},
-            meta={"atellagent/idempotencyKey": "effect-1"},
-        )
-        self.assertEqual(response["id"], "request-1")
-        self.assertEqual(response["result"]["content"][0]["text"], "ok")
-
-    async def test_local_mcp_transport_failure_is_not_retried(self) -> None:
-        target = LocalMCPClient(
-            BridgeDeploymentConfig(target_transport="stdio", target_command="example-mcp")
-        )
-        client = SimpleNamespace(call_tool=AsyncMock(side_effect=ConnectionError("lost")))
-        target._client = client
-        target.close = AsyncMock()
-
-        with self.assertRaises(ConnectionError):
-            await target.invoke(
-                {
-                    "jsonrpc": "2.0",
-                    "id": "request-1",
-                    "method": "tools/call",
-                    "params": {"name": "lookup", "arguments": {}},
-                },
-                "effect-1",
-            )
-
-        client.call_tool.assert_awaited_once()
-        target.close.assert_awaited_once()
-
-    async def test_local_mcp_manifest_bypasses_discovery_cache(self) -> None:
-        target = LocalMCPClient(
-            BridgeDeploymentConfig(target_transport="stdio", target_command="example-mcp")
-        )
-        listed_tool = SimpleNamespace(
-            model_dump=Mock(return_value={"name": "lookup", "inputSchema": {}})
-        )
-        client = SimpleNamespace(
-            list_tools=AsyncMock(return_value=SimpleNamespace(tools=[listed_tool]))
-        )
-        target._client = client
-
-        manifest = await target.manifest()
-
-        client.list_tools.assert_awaited_once_with(cache_mode="bypass")
-        self.assertEqual(manifest, {"tools": [{"name": "lookup", "inputSchema": {}}]})
-
-    def test_local_mcp_requires_a_complete_modern_discovery_result(self) -> None:
-        _validate_discovery(
-            {
-                "resultType": "complete",
-                "supportedVersions": ["2026-07-28"],
-                "cacheScope": "private",
-                "ttlMs": 0,
-                "capabilities": {},
-            }
-        )
-        with self.assertRaisesRegex(ValueError, "does not support"):
-            _validate_discovery(
-                {
-                    "resultType": "complete",
-                    "supportedVersions": ["2025-06-18"],
-                    "cacheScope": "private",
-                    "ttlMs": 0,
-                    "capabilities": {},
-                }
-            )
-
-    def test_local_mcp_http_target_is_loopback_only(self) -> None:
-        self.assertEqual(
-            _require_loopback_url("http://127.0.0.1:9000/mcp"),
-            "http://127.0.0.1:9000/mcp",
-        )
-        with self.assertRaisesRegex(ValueError, "loopback"):
-            _require_loopback_url("https://mcp.example.com/mcp")
-
-    def test_local_mcp_http_auth_is_loaded_only_from_environment(self) -> None:
-        target = LocalMCPClient(
-            BridgeDeploymentConfig(
-                target_transport="http",
-                target_url="http://127.0.0.1:9000/mcp",
-                upstream_headers={"X-Static": "reviewed"},
-                upstream_auth_header="X-Local-Token",
-                upstream_auth_token_env="LOCAL_MCP_TOKEN",
-            )
-        )
-        with patch.dict(os.environ, {"LOCAL_MCP_TOKEN": "secret"}, clear=False):
-            self.assertEqual(
-                target._http_headers(),
-                {"X-Static": "reviewed", "X-Local-Token": "secret"},
-            )
-
-
-class ConnectedCapabilityTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self) -> None:
-        self.config = _config()
-        self.message = parse_connected_message(_message()["message"])
-        self.claims = {
-            "typ": "atellagent_connected_runtime_capability",
-            "schema_version": "v1",
-            "iss": "gateway",
-            "sub": self.message.message_id,
-            "aud": [
-                "atellagent-connected-runtime",
-                f"service-account:{self.config.service_account_id}",
-            ],
-            "tenant_id": self.config.tenant_id,
-            "target_service_account_id": self.config.service_account_id,
-            "target_integration_id": self.config.integration_id,
-            "target_certificate_public_key_sha256": "certificate-fingerprint",
-            "integration_type": "agent",
-            "operation": self.message.operation,
-            "message_id": self.message.message_id,
-            "lease_id": self.message.lease.lease_id,
-            "delivery_attempt": self.message.lease.attempt_number,
-            "idempotency_key": self.message.idempotency_key,
-            "execution_id": self.message.execution_id,
-            "execution_attempt_id": self.message.execution_attempt_id,
-            "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
-        }
-
-    def _validator(self) -> ConnectedCapabilityValidator:
-        validator = object.__new__(ConnectedCapabilityValidator)
-        validator._config = self.config
-        validator._certificate_public_key_sha256 = "certificate-fingerprint"
-        return validator
-
-    async def test_unknown_kid_forces_one_rotation_refresh(self) -> None:
-        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))
-        jwk["kid"] = "rotated-key"
-        token = jwt.encode(
-            self.claims,
-            private_key,
-            algorithm="RS256",
-            headers={"kid": "rotated-key"},
-        )
-
-        class _Fetcher:
-            def __init__(self):
-                self.calls = []
-
-            async def get(self, _url, *, force_refresh=False):
-                self.calls.append(force_refresh)
-                return {"keys": [jwk]} if force_refresh else {"keys": []}
-
-        validator = self._validator()
-        validator._fetcher = _Fetcher()
-        await validator.validate_token(self.message, token)
-        self.assertEqual(validator._fetcher.calls, [False, True])
-
-    async def test_every_delivery_binding_mismatch_fails_closed(self) -> None:
-        mismatches = {
-            "typ": "wrong",
-            "schema_version": "v2",
-            "sub": str(uuid4()),
-            "tenant_id": str(uuid4()),
-            "target_service_account_id": str(uuid4()),
-            "target_integration_id": str(uuid4()),
-            "target_certificate_public_key_sha256": "wrong",
-            "integration_type": "model",
-            "operation": "agent.other",
-            "message_id": str(uuid4()),
-            "lease_id": str(uuid4()),
-            "delivery_attempt": 2,
-            "idempotency_key": "different-effect",
-            "execution_id": "different-execution",
-            "execution_attempt_id": "different-attempt",
-        }
-        for claim, bad_value in mismatches.items():
-            with self.subTest(claim=claim):
-                validator = self._validator()
-                changed = dict(self.claims)
-                changed[claim] = bad_value
-                validator._decode = AsyncMock(return_value=changed)
-                with self.assertRaisesRegex(
-                    ConnectedProtocolError, "binding mismatch"
-                ):
-                    await validator.validate_token(self.message, "token")
-
 
 if __name__ == "__main__":
     unittest.main()

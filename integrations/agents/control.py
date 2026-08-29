@@ -15,11 +15,14 @@ from atellagent_client.sdk.config import (
 )
 from atellagent_client.sdk.gateway.session import GatewaySession
 from atellagent_client.protocol.agent_identity import has_bound_principal_identity
+from atellagent_client.protocol.api import build_versioned_route
 from atellagent_client.protocol.agent_contracts import (
     ExternalIdentityEvidence,
     GovernanceCallContext,
     GovernanceReceipt,
     GuardrailDecision,
+    ModelDecision,
+    ModelDecisionRequest,
 )
 from atellagent_client.protocol.context import (
     apply_workflow_headers,
@@ -31,14 +34,14 @@ from atellagent_client.sdk.client_modules.runtime_authority import (
     apply_runtime_authority_headers,
 )
 from atellagent_client.sdk.errors import AuthenticationError, PolicyViolationError
+from atellagent_client.sdk.operations import APIOperations
+from atellagent_client.governance import RuntimeActionGate
 from atellagent_client.sdk.operations_modules.common import extract_policy_detail
 
 from . import control_actions as actions
 from . import control_model_invocation as chat
 from .contracts import BoundaryBootstrapResponse, extract_contract_workflow_context
 from .identity_mode import (
-    ExternalAgentIdentityMode,
-    normalize_identity_mode,
     resolve_identity_mode_from_config,
 )
 
@@ -48,23 +51,33 @@ class ExternalAgentGovernance:
         self,
         config: ServiceAccountConfig,
         *,
-        identity_mode: Optional[ExternalAgentIdentityMode] = None,
+        session_provider: Optional[Callable[[], GatewaySession]] = None,
     ) -> None:
         self.config = config
-        self.gateway_session = GatewaySession.from_service_account_config(config)
-        self.identity_mode = normalize_identity_mode(
-            identity_mode or resolve_identity_mode_from_config(config)
+        self._session_provider = session_provider
+        self._gateway_session = (
+            None if session_provider is not None else GatewaySession.from_service_account_config(config)
         )
+        self._owns_gateway_session = session_provider is None
+        self.identity_mode = resolve_identity_mode_from_config(config)
+        self.action_gate = RuntimeActionGate.from_config(config)
+
+    @property
+    def gateway_session(self) -> GatewaySession:
+        """Return the current gateway session for this execution boundary."""
+        if self._session_provider is not None:
+            return self._session_provider()
+        if self._gateway_session is None:  # pragma: no cover - constructor invariant
+            raise RuntimeError("gateway session is unavailable")
+        return self._gateway_session
 
     @classmethod
     def from_config_path(
         cls,
         config_path: str,
-        *,
-        identity_mode: Optional[ExternalAgentIdentityMode] = None,
     ) -> "ExternalAgentGovernance":
         config = load_service_account_config_from_yaml(config_path)
-        return cls(config, identity_mode=identity_mode)
+        return cls(config)
 
     def _merge_context(
         self,
@@ -124,6 +137,48 @@ class ExternalAgentGovernance:
         return session, apply_runtime_authority_headers(
             apply_workflow_headers(headers, workflow_context=workflow_context)
         )
+
+    async def mcp_communicate_async(
+        self,
+        *,
+        target_binding: str,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        tool_call_id: str,
+    ) -> Dict[str, Any]:
+        """Invoke a governed MCP tool through this boundary's existing session."""
+
+        session, headers = await self._async_headers({})
+        operations = APIOperations(
+            self.config.gateway_url,
+            api_version=self.config.api_version,
+            contract_version=self.config.contract_version,
+        )
+        return await operations.mcp_communicate_async(
+            session,
+            headers,
+            str(self.config.service_account_id),
+            str(target_binding),
+            str(tool_name),
+            dict(arguments),
+            tool_call_id=tool_call_id,
+            action_context={"action_key": f"mcp-bridge-{tool_call_id}"},
+        )
+
+    async def mcp_catalog_async(self) -> Dict[str, Any]:
+        """Fetch this enrolled agent-control runtime's assigned MCP catalog."""
+
+        session, headers = await self._async_headers({})
+        response = await session.get(
+            f"{self.gateway_session.base_url}{build_versioned_route(self.config.api_version, '/agents/boundary/mcp-catalog')}",
+            headers=headers,
+        )
+        payload = response.json() if response.content else {}
+        if response.status_code >= 400:
+            self._raise_gateway_error(response.status_code, payload)
+        if not isinstance(payload, dict) or payload.get("success") is not True:
+            raise RuntimeError("gateway MCP catalog response is invalid")
+        return payload
 
     def _resolve_model_workflow_context_sync(
         self,
@@ -220,7 +275,7 @@ class ExternalAgentGovernance:
         *,
         receipt: GovernanceReceipt,
         result_payload: Any,
-        success: bool,
+        success: Optional[bool],
         error_message: Optional[str] = None,
         error_type: Optional[str] = None,
         evidence: Optional[Dict[str, Any]] = None,
@@ -244,7 +299,7 @@ class ExternalAgentGovernance:
         *,
         receipt: GovernanceReceipt,
         result_payload: Any,
-        success: bool,
+        success: Optional[bool],
         error_message: Optional[str] = None,
         error_type: Optional[str] = None,
         evidence: Optional[Dict[str, Any]] = None,
@@ -352,11 +407,41 @@ class ExternalAgentGovernance:
             **kwargs,
         )
 
+    def model_decision_sync(
+        self,
+        request: ModelDecisionRequest,
+        *,
+        workflow_context: Optional[Dict[str, Any]] = None,
+        identity: Optional[ExternalIdentityEvidence] = None,
+    ) -> ModelDecision:
+        return chat.model_decision_sync(
+            self,
+            request=request,
+            workflow_context=workflow_context,
+            identity=identity,
+        )
+
+    async def model_decision_async(
+        self,
+        request: ModelDecisionRequest,
+        *,
+        workflow_context: Optional[Dict[str, Any]] = None,
+        identity: Optional[ExternalIdentityEvidence] = None,
+    ) -> ModelDecision:
+        return await chat.model_decision_async(
+            self,
+            request=request,
+            workflow_context=workflow_context,
+            identity=identity,
+        )
+
     def close(self) -> None:
-        self.gateway_session.close_sync()
+        if self._owns_gateway_session:
+            self.gateway_session.close_sync()
 
     async def close_async(self) -> None:
-        await self.gateway_session.close_async()
+        if self._owns_gateway_session:
+            await self.gateway_session.close_async()
 
 
 __all__ = [
@@ -365,4 +450,6 @@ __all__ = [
     "GovernanceCallContext",
     "GovernanceReceipt",
     "GuardrailDecision",
+    "ModelDecision",
+    "ModelDecisionRequest",
 ]

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Any, Dict, List, Mapping, Optional, Protocol, runtime_checkable
 
 from atellagent_client.protocol.context import (
@@ -78,7 +79,7 @@ _MODEL_RUNTIME_FIELDS = {
 
 _FILTER_RUNTIME_FIELDS = {
     "filter_id",
-    "mode",
+    "execution_boundary",
     "content",
     "request_id",
     "workflow_context",
@@ -110,7 +111,7 @@ class ModelRuntimeInvocationRequest:
 @dataclass(frozen=True)
 class FilterRuntimeEvaluationRequest:
     filter_id: str
-    mode: str
+    execution_boundary: str
     content: Any = None
     request_id: Optional[str] = None
     workflow_context: Dict[str, Any] = field(default_factory=dict)
@@ -187,10 +188,14 @@ def coerce_filter_runtime_evaluation_request(
     filter_id = str(raw.get("filter_id") or "").strip()
     if not filter_id:
         raise ValueError("filter_id is required")
-    mode = str(raw.get("mode") or "").strip().lower() or "input_check"
+    execution_boundary = str(raw.get("execution_boundary") or "").strip().lower()
+    if execution_boundary not in {"model_boundary", "tool_response", "egress"}:
+        raise ValueError(
+            "execution_boundary must be model_boundary, tool_response, or egress"
+        )
     return FilterRuntimeEvaluationRequest(
         filter_id=filter_id,
-        mode=mode,
+        execution_boundary=execution_boundary,
         content=raw.get("content"),
         request_id=str(raw.get("request_id") or "").strip() or None,
         workflow_context=_public_workflow_context(raw.get("workflow_context")),
@@ -214,6 +219,17 @@ def coerce_filter_runtime_result(payload: Any) -> Dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise ValueError("filter runtime handler must return a JSON object")
     result = dict(payload)
+    score = result.get("score")
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        raise ValueError("filter runtime handler must return a numeric score")
+    score = float(score)
+    if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+        raise ValueError("filter runtime handler score must be between 0 and 1")
+    result["score"] = score
+    coverage = result.get("coverage")
+    if not isinstance(coverage, str) or coverage.strip().lower() != "complete":
+        raise ValueError("filter runtime handler must return coverage='complete'")
+    result["coverage"] = "complete"
     result["allowed"] = bool(result.get("allowed", False))
     if "violations" in result:
         result["violations"] = _coerce_text_list(result.get("violations"))

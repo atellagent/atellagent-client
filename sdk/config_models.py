@@ -111,6 +111,7 @@ class ServiceAccountConfig:
     api_version: str = DEFAULT_API_VERSION
     contract_version: str = DEFAULT_CONTRACT_VERSION
     control_source: str = "cluster_directive"
+    identity_mode: Optional[str] = None
     local_guardrail_manifest_path: Optional[str] = None
     local_guardrail_mode: Optional[str] = None
     cert_path: Optional[str] = None
@@ -118,6 +119,9 @@ class ServiceAccountConfig:
     timeout: float = 120.0
     integration_name: Optional[str] = None
     integration_type: Optional[str] = None
+    # Server-owned semantic placement for a connected customer filter. The
+    # client carries this public contract field but never selects or changes it.
+    filter_execution_boundary: Optional[str] = None
     integration_category: Optional[str] = None
     channel_type: Optional[str] = None
     channel_provider_key: Optional[str] = None
@@ -185,6 +189,23 @@ class ServiceAccountConfig:
                 "integration_type must be 'agent', 'mcp', 'channel', "
                 "'model', 'ml_filter', or 'workflow_runtime'"
             )
+        normalized_filter_boundary = (
+            str(self.filter_execution_boundary or "").strip().lower() or None
+        )
+        if self.integration_type == "ml_filter":
+            if normalized_filter_boundary not in {
+                "model_boundary",
+                "tool_response",
+                "egress",
+            }:
+                raise ValueError(
+                    "filter_execution_boundary is required for connected ml_filter service accounts"
+                )
+        elif normalized_filter_boundary is not None:
+            raise ValueError(
+                "filter_execution_boundary is valid only for connected ml_filter service accounts"
+            )
+        self.filter_execution_boundary = normalized_filter_boundary
         self.control_source = str(self.control_source or "").strip().lower()
         if self.control_source not in {"cluster_directive", "local_manifest"}:
             raise ValueError(
@@ -211,6 +232,18 @@ class ServiceAccountConfig:
             raise ValueError(
                 "local guardrail settings are valid only with control_source=local_manifest"
             )
+        normalized_identity_mode = str(self.identity_mode or "").strip().lower() or None
+        if self.integration_type in {"agent", "mcp"}:
+            if normalized_identity_mode not in {
+                "boundary_identity_only",
+                "federated_agent_identity",
+            }:
+                raise ValueError(
+                    "identity_mode is required for connected agent and MCP service accounts"
+                )
+        elif normalized_identity_mode is not None:
+            raise ValueError("identity_mode is valid only for connected agent and MCP service accounts")
+        self.identity_mode = normalized_identity_mode
 
     @property
     def auth_client_id(self) -> str:

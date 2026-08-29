@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from hashlib import sha256
+import json
+from typing import Any, Dict, List, Literal, Optional
 import uuid
 
 
@@ -87,6 +89,11 @@ class GovernanceReceipt:
     workflow_context: Dict[str, Any]
     outcome: Optional[str] = None
     reason: Optional[str] = None
+    decision_id: Optional[str] = None
+    coverage: Optional[str] = None
+    obligations: tuple[Dict[str, Any], ...] = ()
+    control_directive: Optional[str] = None
+    directive_expires_at: Optional[str] = None
 
     @property
     def is_executable(self) -> bool:
@@ -94,6 +101,117 @@ class GovernanceReceipt:
             self.action_key
             and self.allowed
             and self.outcome in {None, "allow"}
+        )
+
+
+@dataclass(frozen=True)
+class ModelDecisionRequest:
+    """Portable input to a synchronous model-admission decision endpoint."""
+
+    input_scope: Literal["turn_entry", "full_model_request"]
+    messages: List[Dict[str, Any]]
+    model: Optional[str] = None
+    provider: Optional[str] = None
+    tool_definitions: Optional[List[Dict[str, Any]]] = None
+    provider_request: Optional[Dict[str, Any]] = None
+    generation: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.messages:
+            raise ValueError("ModelDecisionRequest.messages must be non-empty")
+        for message in self.messages:
+            if not isinstance(message, dict):
+                raise ValueError("ModelDecisionRequest.messages must contain objects")
+            role = str(message.get("role") or "").strip()
+            if role not in {"system", "user", "assistant", "tool", "function"}:
+                raise ValueError("ModelDecisionRequest message role is unsupported")
+            if not isinstance(message.get("content"), str):
+                raise ValueError("ModelDecisionRequest message content must be text")
+        if self.input_scope == "full_model_request" and (
+            not str(self.model or "").strip() or not str(self.provider or "").strip()
+        ):
+            raise ValueError("full_model_request requires model and provider")
+        if self.input_scope == "turn_entry" and (self.model or self.provider):
+            raise ValueError("turn_entry must not provide model or provider")
+        if self.input_scope == "turn_entry" and self.provider_request:
+            raise ValueError("turn_entry must not provide provider_request")
+        if self.input_scope == "turn_entry" and (
+            len(self.messages) != 1 or self.messages[0].get("role") != "user"
+        ):
+            raise ValueError("turn_entry requires exactly one user message")
+        if self.provider_request is not None and not isinstance(self.provider_request, dict):
+            raise ValueError("provider_request must be an object when provided")
+
+    def to_payload(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "input_scope": self.input_scope,
+            "messages": list(self.messages),
+        }
+        if self.model:
+            payload["model"] = self.model
+        if self.provider:
+            payload["provider"] = self.provider
+        if self.tool_definitions is not None:
+            payload["tool_definitions"] = list(self.tool_definitions)
+        if self.provider_request is not None:
+            payload["provider_request"] = dict(self.provider_request)
+        payload.update(dict(self.generation))
+        return payload
+
+    @property
+    def request_fingerprint(self) -> str:
+        """Opaque binding for the exact public decision payload."""
+        return sha256(
+            json.dumps(
+                self.to_payload(), sort_keys=True, separators=(",", ":"), default=str
+            ).encode("utf-8")
+        ).hexdigest()
+
+
+@dataclass(frozen=True)
+class ModelDecision:
+    """Customer-safe decision projection; detector and policy internals stay remote."""
+
+    outcome: Literal["allow", "deny"]
+    enforcement: Literal["enforced", "advisory"]
+    input_scope: Literal["turn_entry", "full_model_request"]
+    evaluated: Dict[str, str]
+    reason_code: str
+    reason: str
+    obligations: tuple[Dict[str, Any], ...]
+    valid_until: Optional[str]
+    decision_id: str
+    correlation_id: str
+    request_fingerprint: str
+
+    @classmethod
+    def from_payload(cls, payload: Any) -> "ModelDecision":
+        values = payload if isinstance(payload, dict) else {}
+        outcome = str(values.get("outcome") or "").strip().lower()
+        enforcement = str(values.get("enforcement") or "").strip().lower()
+        input_scope = str(values.get("input_scope") or "").strip()
+        if outcome not in {"allow", "deny"} or enforcement not in {"enforced", "advisory"}:
+            raise ValueError("model decision response is invalid")
+        if input_scope not in {"turn_entry", "full_model_request"}:
+            raise ValueError("model decision response has an unsupported input scope")
+        obligations = values.get("obligations")
+        request_fingerprint = str(values.get("request_fingerprint") or "").strip()
+        if len(request_fingerprint) != 64:
+            raise ValueError("model decision response is missing a request fingerprint")
+        return cls(
+            outcome=outcome,  # type: ignore[arg-type]
+            enforcement=enforcement,  # type: ignore[arg-type]
+            input_scope=input_scope,  # type: ignore[arg-type]
+            evaluated=dict(values.get("evaluated") or {}),
+            reason_code=str(values.get("reason_code") or "policy.unknown"),
+            reason=str(values.get("reason") or "Policy decision unavailable"),
+            obligations=tuple(
+                dict(item) for item in (obligations or []) if isinstance(item, dict)
+            ),
+            valid_until=(str(values["valid_until"]) if values.get("valid_until") else None),
+            decision_id=str(values.get("decision_id") or ""),
+            correlation_id=str(values.get("correlation_id") or ""),
+            request_fingerprint=request_fingerprint,
         )
 
 
@@ -113,6 +231,8 @@ __all__ = [
     "GovernanceCallContext",
     "GovernanceReceipt",
     "GuardrailDecision",
+    "ModelDecision",
+    "ModelDecisionRequest",
     "ToolCallRequest",
     "ToolCallResult",
 ]

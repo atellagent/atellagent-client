@@ -1,0 +1,2 @@
+# Administrator-managed requirements.toml setting.
+allow_managed_hooks_only = true

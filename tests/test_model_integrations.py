@@ -19,6 +19,8 @@ from atellagent_client.integrations.models import (
 from atellagent_client.integrations.models.contracts import (
     FilterRuntimeEvaluationRequest,
     ModelRuntimeInvocationRequest,
+    coerce_filter_runtime_result,
+    coerce_filter_runtime_evaluation_request,
 )
 
 
@@ -207,21 +209,80 @@ class ModelIntegrationTests(unittest.TestCase):
             ]
 
         async def run() -> None:
-            handler = HuggingFaceTextClassificationFilter(classifier=classifier, threshold=0.7)
+            handler = HuggingFaceTextClassificationFilter(
+                model_id="customer/example-classifier",
+                blocked_labels=("toxic",),
+                classifier=classifier,
+                threshold=0.7,
+            )
             result = await handler.evaluate_filter(
                 FilterRuntimeEvaluationRequest(
-                    filter_id="toxicity",
-                    mode="output_check",
-                    content="unsafe generated output",
+                    filter_id="customer.classification",
+                    execution_boundary="egress",
+                    content="synthetic classification fixture",
                 )
             )
             self.assertFalse(result["allowed"])
             self.assertEqual(result["score"], 0.91)
-            self.assertEqual(result["scores"]["toxicity"], 0.91)
+            self.assertEqual(result["scores"]["customer.classification"], 0.91)
             self.assertEqual(result["violations"], ["toxic"])
-            self.assertEqual(result["metadata"]["mode"], "output_check")
+            self.assertEqual(result["metadata"]["execution_boundary"], "egress")
+
+            self.assertFalse(
+                (
+                    await handler.evaluate_filter(
+                        FilterRuntimeEvaluationRequest(
+                            filter_id="customer.classification",
+                            execution_boundary="tool_response",
+                            content="synthetic classification fixture",
+                        )
+                    )
+                )["allowed"]
+            )
 
         asyncio.run(run())
+
+    def test_filter_request_requires_one_explicit_semantic_boundary(self) -> None:
+        request = coerce_filter_runtime_evaluation_request(
+            {
+                "filter_id": "customer.classification",
+                "execution_boundary": "model_boundary",
+                "content": "synthetic classification fixture",
+            }
+        )
+        self.assertEqual(request.execution_boundary, "model_boundary")
+        with self.assertRaisesRegex(ValueError, "unsupported fields: mode"):
+            coerce_filter_runtime_evaluation_request(
+                {"filter_id": "customer.classification", "mode": "input_check"}
+            )
+        with self.assertRaisesRegex(ValueError, "execution_boundary"):
+            coerce_filter_runtime_evaluation_request(
+                {"filter_id": "customer.classification", "execution_boundary": "unknown"}
+            )
+
+    def test_filter_result_requires_complete_coverage_and_a_finite_normalized_score(self) -> None:
+        self.assertEqual(
+            coerce_filter_runtime_result({"score": 0.5, "coverage": "complete"}),
+            {"score": 0.5, "coverage": "complete", "allowed": False, "violations": []},
+        )
+        for payload in (
+            {},
+            {"score": True},
+            {"score": "0.5"},
+            {"score": float("nan")},
+            {"score": float("inf")},
+            {"score": -0.01},
+            {"score": 1.01},
+        ):
+            with self.assertRaisesRegex(ValueError, "score"):
+                coerce_filter_runtime_result(payload)
+        for payload in (
+            {"score": 0.5},
+            {"score": 0.5, "coverage": "partial"},
+            {"score": 0.5, "coverage": "unknown"},
+        ):
+            with self.assertRaisesRegex(ValueError, "coverage"):
+                coerce_filter_runtime_result(payload)
 
 
 if __name__ == "__main__":

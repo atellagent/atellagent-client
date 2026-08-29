@@ -8,17 +8,27 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from secrets import token_urlsafe
 import sys
 from pathlib import Path
 from typing import Any, Mapping
 
 import yaml
 
+from atellagent_client.integrations.agents.hook_control_protocol import (
+    HookControlClient,
+)
 from atellagent_client.sdk.client_modules.client_class import AtellagentClient
 from atellagent_client.sdk.config import load_service_account_config_from_yaml
 
 from .agent import MCPAgentProxy, MCPAgentProxyError
-from .contracts import MCPProxyTool, _ConfiguredMCPToolGateway
+from .bridge_config import load_local_mcp_bridge_config
+from .contracts import (
+    MCPProxyTool,
+    MCPToolResult,
+    MCPVisibleTool,
+    _ConfiguredMCPToolGateway,
+)
 from .tool import MCPToolProxy, MCPToolTarget
 
 
@@ -29,7 +39,10 @@ def _object(value: Any, label: str) -> Mapping[str, Any]:
 
 
 def _read_agent_proxy_config(path: str) -> tuple[str, str | None, list[MCPProxyTool]]:
-    document = _object(yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}, "agent proxy configuration")
+    document = _object(
+        yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {},
+        "agent proxy configuration",
+    )
     client_config = str(document.get("client_config") or "").strip()
     if not client_config:
         raise ValueError("client_config is required")
@@ -57,7 +70,11 @@ async def _run_agent_proxy(config_path: str) -> int:
     client_config_path, source_agent, tools = _read_agent_proxy_config(config_path)
     client = AtellagentClient(load_service_account_config_from_yaml(client_config_path))
     proxy = MCPAgentProxy(
-        gateway=_ConfiguredMCPToolGateway(client=client, tools=tools, source_agent=source_agent)
+        gateway=_ConfiguredMCPToolGateway(
+            client=client,
+            tools=tools,
+            source_agent=source_agent,
+        )
     )
     try:
         for line in sys.stdin:
@@ -74,11 +91,89 @@ async def _run_agent_proxy(config_path: str) -> int:
     return 0
 
 
+class _LocalMCPToolGateway:
+    """Use the enrolled local control runtime without owning credentials."""
+
+    def __init__(self, *, control_socket: str) -> None:
+        self._control = HookControlClient(control_socket, timeout_seconds=305.0)
+
+    async def list_tools(self) -> tuple[MCPVisibleTool, ...]:
+        result = await self._control.call("mcp.list", {})
+        raw_tools = result.get("tools")
+        if not isinstance(raw_tools, list):
+            raise RuntimeError("local MCP control returned an invalid tool catalog")
+        tools: list[MCPVisibleTool] = []
+        names: set[str] = set()
+        for raw_tool in raw_tools:
+            if not isinstance(raw_tool, Mapping):
+                raise RuntimeError("local MCP control returned an invalid tool catalog")
+            tool = MCPVisibleTool(
+                name=raw_tool.get("name", ""),
+                description=raw_tool.get("description", ""),
+                input_schema=raw_tool.get("inputSchema", {}),
+            )
+            if tool.name in names:
+                raise RuntimeError("local MCP control returned an invalid tool catalog")
+            names.add(tool.name)
+            tools.append(tool)
+        return tuple(tools)
+
+    async def invoke_tool(
+        self,
+        *,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        peer_call_id: str | int | None,
+    ) -> MCPToolResult:
+        if not isinstance(arguments, Mapping):
+            raise ValueError("MCP tool arguments must be an object")
+        result = await self._control.call(
+            "mcp.invoke",
+            {
+                "tool_name": str(tool_name),
+                "arguments": dict(arguments),
+                "tool_call_id": f"mcp-{token_urlsafe(24)}",
+            },
+        )
+        content = result.get("content")
+        if not isinstance(content, list) or not all(isinstance(item, Mapping) for item in content):
+            raise RuntimeError("local MCP control returned an invalid tool result")
+        return MCPToolResult(
+            content=tuple(dict(item) for item in content),
+            is_error=result.get("is_error") is True,
+        )
+
+
+async def _run_local_mcp_bridge(config_path: str) -> int:
+    config = load_local_mcp_bridge_config(config_path)
+    proxy = MCPAgentProxy(
+        gateway=_LocalMCPToolGateway(control_socket=config.control_socket)
+    )
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        try:
+            response = await proxy.handle_json_line(line)
+        except MCPAgentProxyError as error:
+            response = json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": str(error)}})
+        if response is not None:
+            print(response, flush=True)
+    return 0
+
+
 def agent_main() -> int:
-    parser = argparse.ArgumentParser(description="Run an Atellagent MCP agent compatibility proxy over stdio.")
+    parser = argparse.ArgumentParser(description="Run an Atellagent local MCP bridge over stdio.")
     parser.add_argument("--config", required=True, help="Path to the customer-owned agent proxy YAML configuration.")
     args = parser.parse_args()
     return asyncio.run(_run_agent_proxy(args.config))
+
+
+def mcp_bridge_main() -> int:
+    """Named entry point for an agent-facing, policy-bound MCP bridge."""
+    parser = argparse.ArgumentParser(description="Run a local Atellagent MCP bridge over stdio.")
+    parser.add_argument("--config", required=True, help="Path to the local MCP bridge YAML configuration.")
+    args = parser.parse_args()
+    return asyncio.run(_run_local_mcp_bridge(args.config))
 
 
 async def _run_tool_proxy(args: argparse.Namespace) -> int:

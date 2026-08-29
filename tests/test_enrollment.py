@@ -102,6 +102,7 @@ class CertificateEnrollmentTests(unittest.IsolatedAsyncioTestCase):
                         datetime.now(timezone.utc) + timedelta(minutes=15)
                     ).isoformat(),
                     "integration_type": "agent",
+                    "identity_mode": "boundary_identity_only",
                     "deployment": {"type": "sdk"},
                 }
             ),
@@ -297,11 +298,62 @@ class CertificateEnrollmentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config.packaging, "sdk")
         self.assertEqual(config.deployment.type, "sdk")
 
+    def test_connected_filter_config_preserves_server_selected_boundary(self) -> None:
+        data = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
+        data.update(
+            {
+                "integration_type": "ml_filter",
+                "filter_execution_boundary": "egress",
+                "identity_mode": None,
+            }
+        )
+        self.config_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        with patch.dict(
+            os.environ,
+            {
+                "ATELLAGENT_CERT_PATH": "/credentials/client-cert.pem",
+                "ATELLAGENT_KEY_PATH": "/credentials/client-key.pem",
+            },
+            clear=True,
+        ):
+            config = load_service_account_config_from_yaml(str(self.config_path))
+        self.assertEqual(config.filter_execution_boundary, "egress")
+
+        for invalid in (None, "unknown"):
+            data["filter_execution_boundary"] = invalid
+            self.config_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {
+                    "ATELLAGENT_CERT_PATH": "/credentials/client-cert.pem",
+                    "ATELLAGENT_KEY_PATH": "/credentials/client-key.pem",
+                },
+                clear=True,
+            ):
+                with self.assertRaisesRegex(ValueError, "filter_execution_boundary"):
+                    load_service_account_config_from_yaml(str(self.config_path))
+
+        data["integration_type"] = "agent"
+        data["filter_execution_boundary"] = "egress"
+        data["identity_mode"] = "boundary_identity_only"
+        self.config_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        with patch.dict(
+            os.environ,
+            {
+                "ATELLAGENT_CERT_PATH": "/credentials/client-cert.pem",
+                "ATELLAGENT_KEY_PATH": "/credentials/client-key.pem",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "valid only for connected ml_filter"):
+                load_service_account_config_from_yaml(str(self.config_path))
+
     def test_local_control_configuration_is_mcp_only_and_resolves_relative_manifest(self) -> None:
         data = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
         data.update(
             {
                 "integration_type": "mcp",
+                "identity_mode": "boundary_identity_only",
                 "packaging": "bridge",
                 "deployment": {
                     "type": "bridge",

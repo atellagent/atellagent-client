@@ -1,0 +1,6 @@
+{
+  "hooks": {
+    "BeforeModel": [{"hooks": [{"name": "atellagent-before-model", "type": "command", "command": "/usr/local/bin/atellagent-hook-adapter --host gemini-cli --socket /run/user/<uid>/atellagent/control.sock", "timeout": 8000}]}],
+    "BeforeTool": [{"matcher": ".*", "hooks": [{"name": "atellagent-before-tool", "type": "command", "command": "/usr/local/bin/atellagent-hook-adapter --host gemini-cli --socket /run/user/<uid>/atellagent/control.sock", "timeout": 8000}]}]
+  }
+}

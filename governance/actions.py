@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import inspect
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
@@ -49,6 +50,10 @@ class RuntimeActionGate:
     @classmethod
     def from_config_path(cls, config_path: str) -> "RuntimeActionGate":
         config = load_service_account_config_from_yaml(config_path)
+        return cls.from_config(config)
+
+    @classmethod
+    def from_config(cls, config: Any) -> "RuntimeActionGate":
         if config.control_source == "local_manifest":
             return cls.from_local_manifest(
                 str(config.local_guardrail_manifest_path),
@@ -58,6 +63,15 @@ class RuntimeActionGate:
             source="cluster_directive",
             directive_verifier=GatewayDirectiveVerifier(config),
         )
+
+    def enforce_sync(self, **kwargs: Any) -> None:
+        """Synchronous form for a synchronous host callback boundary."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self.enforce(**kwargs))
+            return
+        raise ActionDenied("control_sync_called_from_running_loop")
 
     @classmethod
     def from_local_manifest(
@@ -86,6 +100,7 @@ class RuntimeActionGate:
         encoded_directive: Optional[str] = None,
         facts: Optional[Mapping[str, Any]] = None,
         workflow_context: Optional[Mapping[str, Any]] = None,
+        policy_decision_id: Optional[str] = None,
     ) -> None:
         normalized_action = _text(action)
         normalized_integration_type = _text(integration_type)
@@ -104,6 +119,7 @@ class RuntimeActionGate:
             tenant_id=_context_value(workflow_context, "tenant_id"),
             execution_id=_context_value(workflow_context, "execution_id"),
             workspace_id=_context_value(workflow_context, "workspace_id"),
+            policy_decision_id=_text(policy_decision_id) or None,
         )
         try:
             directive = None

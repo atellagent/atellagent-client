@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence as SequenceABC
 from dataclasses import dataclass, field
+from secrets import token_urlsafe
 from typing import Any, Mapping, Protocol, Sequence
 
 
@@ -17,14 +19,12 @@ def _required_text(value: object, *, field_name: str) -> str:
 
 
 @dataclass(frozen=True)
-class MCPProxyTool:
-    """One MCP-visible tool bound to a configured client target."""
+class MCPVisibleTool:
+    """One public MCP tool descriptor with no target credential or binding."""
 
     name: str
     description: str
     input_schema: Mapping[str, Any]
-    target_binding: str
-    target_tool_name: str
 
     def __post_init__(self) -> None:
         name = _required_text(self.name, field_name="name")
@@ -34,8 +34,30 @@ class MCPProxyTool:
         if not isinstance(schema.get("properties", {}), Mapping):
             raise ValueError("input_schema.properties must be an object")
         object.__setattr__(self, "name", name)
-        object.__setattr__(self, "description", _required_text(self.description, field_name="description"))
+        object.__setattr__(
+            self,
+            "description",
+            _required_text(self.description, field_name="description"),
+        )
         object.__setattr__(self, "input_schema", schema)
+
+    def as_mcp_tool(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "inputSchema": dict(self.input_schema),
+        }
+
+
+@dataclass(frozen=True)
+class MCPProxyTool(MCPVisibleTool):
+    """One MCP-visible tool bound to a configured client target."""
+
+    target_binding: str
+    target_tool_name: str
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
         object.__setattr__(
             self,
             "target_binding",
@@ -46,15 +68,6 @@ class MCPProxyTool:
             "target_tool_name",
             _required_text(self.target_tool_name, field_name="target_tool_name"),
         )
-
-    def as_mcp_tool(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "description": self.description,
-            "inputSchema": dict(self.input_schema),
-        }
-
-
 @dataclass(frozen=True)
 class MCPToolResult:
     """A tool result safe to render on an MCP peer connection."""
@@ -72,7 +85,7 @@ class MCPToolResult:
 class _ProxyInvocationPort(Protocol):
     """Configured tool catalog and invocation port for an MCP proxy."""
 
-    async def list_tools(self) -> Sequence[MCPProxyTool]: ...
+    async def list_tools(self) -> Sequence[MCPVisibleTool]: ...
 
     async def invoke_tool(
         self,
@@ -121,20 +134,34 @@ class _ConfiguredMCPToolGateway:
             raise ValueError("MCP proxy tool is not configured")
         if not isinstance(arguments, Mapping):
             raise ValueError("MCP tool arguments must be an object")
-        call = getattr(self._client, "call_mcp_tool_async", None)
+        call = getattr(self._client, "call_mcp_tool_result_async", None)
         if call is None:
-            raise TypeError("client must provide call_mcp_tool_async")
-        content = await call(
+            raise TypeError("client must provide call_mcp_tool_result_async")
+        result = await call(
             tool.target_binding,
             tool.target_tool_name,
             dict(arguments),
             source_agent=self._source_agent,
             tool_call_id=str(peer_call_id) if peer_call_id is not None else None,
+            action_context={"action_key": f"mcp-bridge-{token_urlsafe(24)}"},
         )
-        return MCPToolResult(content=({"type": "text", "text": str(content)},))
+        if not isinstance(result, Mapping):
+            raise RuntimeError("MCP bridge received an invalid tool result")
+        content = result.get("content")
+        if (
+            not isinstance(content, SequenceABC)
+            or isinstance(content, (str, bytes))
+            or not all(isinstance(item, Mapping) for item in content)
+        ):
+            raise RuntimeError("MCP bridge received an invalid tool result")
+        return MCPToolResult(
+            content=tuple(dict(item) for item in content),
+            is_error=result.get("isError") is True,
+        )
 
 
 __all__ = [
+    "MCPVisibleTool",
     "MCPProxyTool",
     "MCPToolResult",
 ]

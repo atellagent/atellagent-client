@@ -18,8 +18,8 @@ from atellagent_client.sdk.config import load_service_account_config_from_yaml
 async def run() -> None:
     config_path = os.getenv("CONFIG_PATH") or bundled_example_path("config/filter.yaml")
     handler = HuggingFaceTextClassificationFilter(
-        model_id=os.getenv("HF_FILTER_MODEL", "unitary/toxic-bert"),
-        blocked_labels=("toxic",),
+        model_id=os.environ["HF_FILTER_MODEL"],
+        blocked_labels=(os.environ["HF_FILTER_BLOCKED_LABEL"],),
         threshold=float(os.getenv("HF_FILTER_THRESHOLD", "0.5")),
     )
     runtime = ConnectedSDKRuntime(load_service_account_config_from_yaml(config_path))

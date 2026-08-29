@@ -14,6 +14,7 @@ import inspect
 import json
 import logging
 import os
+import signal
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -21,6 +22,7 @@ from typing import Any, Mapping, Optional
 import yaml
 
 from atellagent_client.integrations.channels.registry import ChannelAdapterRegistry
+from atellagent_client.integrations.agents.hook_control import HookControlRuntime
 from atellagent_client.connected import (
     ConnectedBridge,
     LocalMCPClient,
@@ -46,6 +48,25 @@ from atellagent_client.sdk.enrollment import (
 def _die(message: str) -> None:
     print(f"[ERROR] {message}", file=sys.stderr)
     raise SystemExit(1)
+
+
+async def _wait_for_shutdown_signal() -> None:
+    """Wait for a process termination signal without bypassing runtime cleanup."""
+    stopped = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    registered: list[signal.Signals] = []
+    for termination_signal in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(termination_signal, stopped.set)
+        except (NotImplementedError, RuntimeError):
+            continue
+        registered.append(termination_signal)
+    try:
+        await stopped.wait()
+    finally:
+        for termination_signal in registered:
+            with suppress(NotImplementedError, RuntimeError):
+                loop.remove_signal_handler(termination_signal)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -86,6 +107,12 @@ def _parse_args() -> argparse.Namespace:
         "--target-idempotent",
         action="store_true",
         help="Assert the mounted target durably honors each delivery idempotency key",
+    )
+    parser.add_argument(
+        "--hook-control-socket",
+        help=(
+            "Run the enrolled agent.control Unix-socket service at this absolute path"
+        ),
     )
     parser.add_argument("-v", "--verbose", action="count", default=0)
     return parser.parse_args()
@@ -235,11 +262,26 @@ async def _run(args: argparse.Namespace) -> None:
         await participant.start()
         print(f"Connected participant registered: {participant.instance_id}")
         if not args.verify:
-            await participant.run_forever()
+            await _wait_for_shutdown_signal()
     finally:
         await participant.stop()
         if local_mcp is not None:
             await local_mcp.close()
+
+
+async def _run_hook_control(args: argparse.Namespace) -> None:
+    config = load_service_account_config_from_yaml(args.config)
+    runtime = HookControlRuntime(
+        config,
+        socket_path=str(args.hook_control_socket),
+    )
+    try:
+        await runtime.start()
+        print(f"Hook-control service listening on: {runtime.socket_path}")
+        if not args.verify:
+            await _wait_for_shutdown_signal()
+    finally:
+        await runtime.stop()
 
 
 async def _async_main() -> None:
@@ -249,12 +291,23 @@ async def _async_main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     if args.enroll:
-        if args.verify or args.handler or args.mcp_manifest or args.target_idempotent:
+        if (
+            args.verify
+            or args.handler
+            or args.mcp_manifest
+            or args.target_idempotent
+            or args.hook_control_socket
+        ):
             _die("Runtime options cannot be combined with --enroll")
         await _enroll(args)
         return
     if args.replace_credentials or args.cert_path or args.key_path:
         _die("Credential output options require --enroll")
+    if args.hook_control_socket:
+        if args.handler or args.mcp_manifest or args.target_idempotent:
+            _die("Hook-control mode cannot be combined with participant handler options")
+        await _run_hook_control(args)
+        return
     await _run(args)
 
 

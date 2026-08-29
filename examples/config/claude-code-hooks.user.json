@@ -1,0 +1,8 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "atellagent-hook-adapter --host claude-code --socket /run/user/<uid>/atellagent/control.sock", "timeout": 8}]}],
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "atellagent-hook-adapter --host claude-code --socket /run/user/<uid>/atellagent/control.sock", "timeout": 8}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "atellagent-hook-adapter --host claude-code --socket /run/user/<uid>/atellagent/control.sock", "timeout": 8}]}],
+    "PostToolUseFailure": [{"hooks": [{"type": "command", "command": "atellagent-hook-adapter --host claude-code --socket /run/user/<uid>/atellagent/control.sock", "timeout": 8}]}]
+  }
+}

@@ -72,7 +72,7 @@ upstream source repository and is identified as such in their entries.
 | pydantic | 2.13.4 | MIT |
 | pydantic_core | 2.46.4 | MIT |
 | Pygments | 2.20.0 | BSD-2-Clause |
-| PyJWT | 2.10.1 | MIT |
+| PyJWT | 2.13.0 | MIT |
 | python-multipart | 0.0.32 | Apache-2.0 |
 | PyYAML | 6.0.3 | MIT |
 | referencing | 0.37.0 | MIT |
@@ -6425,7 +6425,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ---
 
-### PyJWT 2.10.1
+### PyJWT 2.13.0
 
 Declared license: MIT
 
