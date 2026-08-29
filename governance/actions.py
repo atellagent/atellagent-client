@@ -100,6 +100,7 @@ class RuntimeActionGate:
         encoded_directive: Optional[str] = None,
         facts: Optional[Mapping[str, Any]] = None,
         workflow_context: Optional[Mapping[str, Any]] = None,
+        policy_decision_id: Optional[str] = None,
     ) -> None:
         normalized_action = _text(action)
         normalized_integration_type = _text(integration_type)
@@ -118,6 +119,7 @@ class RuntimeActionGate:
             tenant_id=_context_value(workflow_context, "tenant_id"),
             execution_id=_context_value(workflow_context, "execution_id"),
             workspace_id=_context_value(workflow_context, "workspace_id"),
+            policy_decision_id=_text(policy_decision_id) or None,
         )
         try:
             directive = None

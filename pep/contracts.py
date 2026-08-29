@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import logging
+import hashlib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import time
@@ -40,6 +42,17 @@ DecisionObserver = Callable[["DecisionEnvelope"], None]
 
 class DirectiveValidationError(ValueError):
     """Raised when an opaque remote control directive is unusable."""
+
+
+def raw_action_fingerprint(*, action: str, facts: Dict[str, Any]) -> str:
+    """Return the exact invocation binding carried by a signed directive."""
+
+    payload = {"tool_name": action.strip(), "arguments": dict(facts)}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode(
+            "utf-8"
+        )
+    ).hexdigest()
 
 
 def _text(value: Any, field_name: str, *, required: bool = False) -> Optional[str]:
@@ -120,6 +133,8 @@ class ActionIntent:
     execution_id: Optional[str] = None
     workspace_id: Optional[str] = None
     evidence_references: tuple[str, ...] = ()
+    raw_action_fingerprint: Optional[str] = None
+    policy_decision_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         _text(self.action, "action", required=True)
@@ -129,6 +144,15 @@ class ActionIntent:
             for reference in self.evidence_references
         ):
             raise ValueError("evidence_references must contain non-empty strings")
+        expected_fingerprint = raw_action_fingerprint(action=self.action, facts=self.facts)
+        if (
+            self.raw_action_fingerprint is not None
+            and self.raw_action_fingerprint != expected_fingerprint
+        ):
+            raise ValueError("raw_action_fingerprint does not match action facts")
+        object.__setattr__(self, "raw_action_fingerprint", expected_fingerprint)
+        if self.policy_decision_id is not None:
+            _text(self.policy_decision_id, "policy_decision_id", required=True)
 
     def to_remote_request(self) -> Dict[str, Any]:
         """Serialize only the stable public inputs to a remote control service."""
@@ -139,6 +163,8 @@ class ActionIntent:
             "technical_capabilities": list(self.capability.action_kinds),
             "correlation_id": self.correlation_id,
             "facts": dict(self.facts),
+            "raw_action_fingerprint": self.raw_action_fingerprint,
+            "policy_decision_id": self.policy_decision_id,
             "tenant_id": self.tenant_id,
             "execution_id": self.execution_id,
             "workspace_id": self.workspace_id,
@@ -491,6 +517,44 @@ def directive_from_verified_claims(
         != intent.correlation_id
     ):
         raise DirectiveValidationError("remote_directive_scope_mismatch")
+    if claims.get("raw_action_fingerprint") != intent.raw_action_fingerprint:
+        raise DirectiveValidationError("remote_directive_scope_mismatch")
+    if (
+        _text(claims.get("policy_decision_id"), "directive policy_decision_id", required=True)
+        != intent.policy_decision_id
+    ):
+        raise DirectiveValidationError("remote_directive_scope_mismatch")
+    descriptor = claims.get("descriptor")
+    if not isinstance(descriptor, dict) or set(descriptor) != {
+        "id",
+        "revision",
+        "digest",
+        "action_id",
+        "execution_route",
+        "integration_id",
+    }:
+        raise DirectiveValidationError("remote_directive_invalid")
+    descriptor_id = _text(descriptor.get("id"), "directive descriptor.id", required=True)
+    descriptor_digest = _text(
+        descriptor.get("digest"), "directive descriptor.digest", required=True
+    )
+    descriptor_action_id = _text(
+        descriptor.get("action_id"), "directive descriptor.action_id", required=True
+    )
+    execution_route = _text(
+        descriptor.get("execution_route"), "directive descriptor.execution_route", required=True
+    )
+    integration_id = _text(
+        descriptor.get("integration_id"), "directive descriptor.integration_id", required=True
+    )
+    if (
+        not isinstance(descriptor.get("revision"), int)
+        or isinstance(descriptor.get("revision"), bool)
+        or descriptor["revision"] < 1
+        or len(descriptor_digest or "") != 64
+        or any(character not in "0123456789abcdef" for character in descriptor_digest or "")
+    ):
+        raise DirectiveValidationError("remote_directive_invalid")
     for attr in ("tenant_id", "execution_id", "workspace_id"):
         value = claims.get(attr)
         if value is not None and value != getattr(intent, attr):

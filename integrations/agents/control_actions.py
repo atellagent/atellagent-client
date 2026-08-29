@@ -256,6 +256,7 @@ def execute_sync(
         encoded_directive=effective_receipt.control_directive,
         facts=context.arguments,
         workflow_context=effective_receipt.workflow_context,
+        policy_decision_id=effective_receipt.decision_id,
     )
     token = set_workflow_context(effective_receipt.workflow_context)
     try:
@@ -313,6 +314,7 @@ async def execute_async(
         encoded_directive=effective_receipt.control_directive,
         facts=context.arguments,
         workflow_context=effective_receipt.workflow_context,
+        policy_decision_id=effective_receipt.decision_id,
     )
     token = set_workflow_context(effective_receipt.workflow_context)
     try:
