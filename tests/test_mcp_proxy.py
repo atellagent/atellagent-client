@@ -20,6 +20,9 @@ from atellagent_client.proxy import (
     MCPToolTarget,
 )
 from atellagent_client.proxy.agent import MCPAgentProxyError
+from atellagent_client.proxy.contracts import _ConfiguredMCPToolGateway
+from atellagent_client.proxy.bridge_config import load_local_mcp_bridge_config
+from atellagent_client.sdk.client_modules.mcp_tools import _mcp_tool_result
 from atellagent_client.proxy.tool import LEGACY_MCP_PROTOCOL_VERSIONS, MCPToolProxyError
 
 
@@ -43,6 +46,21 @@ class _Gateway:
         return MCPToolResult(content=({"type": "text", "text": "ok"},))
 
 
+class _BridgeClient:
+    def __init__(self) -> None:
+        self.kwargs: dict[str, Any] = {}
+
+    async def call_mcp_tool_result_async(self, *_args, **_kwargs):
+        self.kwargs = dict(_kwargs)
+        return {
+            "content": (
+                {"type": "text", "text": "native result"},
+                {"type": "resource", "resource": {"uri": "atellagent://record/1"}},
+            ),
+            "isError": True,
+        }
+
+
 class _ProxyWithTransport(MCPToolProxy):
     def __init__(self, *, target: MCPToolTarget, handler) -> None:
         super().__init__(target=target)
@@ -59,6 +77,73 @@ def json_body(request: httpx.Request) -> Mapping[str, Any]:
 
 
 class MCPAgentProxyTests(unittest.IsolatedAsyncioTestCase):
+    def test_local_bridge_config_has_no_client_credential_path(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bridge.yaml"
+            path.write_text(
+                "control_socket: /private/tmp/atellagent/control.sock\n",
+                encoding="utf-8",
+            )
+            config = load_local_mcp_bridge_config(str(path))
+        self.assertEqual(config.control_socket, "/private/tmp/atellagent/control.sock")
+    def test_native_result_extraction_keeps_content_blocks(self) -> None:
+        result = _mcp_tool_result(
+            {
+                "response": {
+                    "jsonrpc": "2.0",
+                    "id": "call-1",
+                    "result": {
+                        "content": [{"type": "text", "text": "record"}],
+                        "isError": True,
+                    },
+                }
+            }
+        )
+        self.assertEqual(result["content"], [{"type": "text", "text": "record"}])
+        self.assertTrue(result["isError"])
+
+    def test_native_result_extraction_unwraps_gateway_action_envelope(self) -> None:
+        result = _mcp_tool_result(
+            {
+                "response": {
+                    "content": "display-ready text",
+                    "mcp_result": {
+                        "content": [{"type": "text", "text": "native record"}],
+                    },
+                }
+            }
+        )
+        self.assertEqual(
+            result["content"], [{"type": "text", "text": "native record"}]
+        )
+
+    async def test_configured_bridge_preserves_native_mcp_content(self) -> None:
+        client = _BridgeClient()
+        gateway = _ConfiguredMCPToolGateway(
+            client=client,
+            tools=(
+                MCPProxyTool(
+                    name="lookup",
+                    description="Look up a record.",
+                    input_schema={"type": "object", "properties": {}},
+                    target_binding="external-resource-id",
+                    target_tool_name="lookup",
+                ),
+            ),
+        )
+        result = await gateway.invoke_tool(
+            tool_name="lookup", arguments={}, peer_call_id="call-1"
+        )
+        self.assertTrue(result.is_error)
+        self.assertEqual(result.content[0]["text"], "native result")
+        self.assertEqual(result.content[1]["type"], "resource")
+        action_key = client.kwargs["action_context"]["action_key"]
+        self.assertTrue(action_key.startswith("mcp-bridge-"))
+        self.assertNotEqual(action_key, "call-1")
+
     async def test_legacy_initialization_binds_one_session_and_calls_gateway(self) -> None:
         gateway = _Gateway()
         proxy = MCPAgentProxy(gateway=gateway)

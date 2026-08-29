@@ -1,7 +1,12 @@
 # Copyright (c) 2026 Atellagent, Inc. All rights reserved.
 # This source code is licensed under the terms found in the LICENSE.md file in the root directory of this source tree.
 
-# Example connected bridge to a customer-local MCP stdio server.
+# Example Tool Proxy configuration for a customer-local MCP server.
+#
+# This is an enrolled, connected MCP runtime with its own service-account
+# identity. It is not the credential-free local Codex MCP adapter. The
+# dashboard-generated configuration supplies the real immutable IDs,
+# certificate paths, and target-specific values.
 gateway_mtls_url: https://gateway.example.com
 oauth_token_url: https://auth.example.com/oidc/token
 oauth_jwks_url: https://auth.example.com/oidc/jwks

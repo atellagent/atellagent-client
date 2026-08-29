@@ -23,6 +23,7 @@ import yaml
 
 from atellagent_client.integrations.channels.registry import ChannelAdapterRegistry
 from atellagent_client.integrations.agents.hook_control import HookControlRuntime
+from atellagent_client.proxy.bridge_config import load_local_mcp_bridge_config
 from atellagent_client.connected import (
     ConnectedBridge,
     LocalMCPClient,
@@ -112,6 +113,12 @@ def _parse_args() -> argparse.Namespace:
         "--hook-control-socket",
         help=(
             "Run the enrolled agent.control Unix-socket service at this absolute path"
+        ),
+    )
+    parser.add_argument(
+        "--mcp-bridge-config",
+        help=(
+            "Local MCP bridge YAML sharing this hook-control socket"
         ),
     )
     parser.add_argument("-v", "--verbose", action="count", default=0)
@@ -271,6 +278,10 @@ async def _run(args: argparse.Namespace) -> None:
 
 async def _run_hook_control(args: argparse.Namespace) -> None:
     config = load_service_account_config_from_yaml(args.config)
+    if args.mcp_bridge_config:
+        bridge_config = load_local_mcp_bridge_config(args.mcp_bridge_config)
+        if Path(bridge_config.control_socket) != Path(args.hook_control_socket):
+            _die("MCP bridge control_socket must match --hook-control-socket")
     runtime = HookControlRuntime(
         config,
         socket_path=str(args.hook_control_socket),
@@ -297,6 +308,7 @@ async def _async_main() -> None:
             or args.mcp_manifest
             or args.target_idempotent
             or args.hook_control_socket
+            or args.mcp_bridge_config
         ):
             _die("Runtime options cannot be combined with --enroll")
         await _enroll(args)
@@ -308,6 +320,8 @@ async def _async_main() -> None:
             _die("Hook-control mode cannot be combined with participant handler options")
         await _run_hook_control(args)
         return
+    if args.mcp_bridge_config:
+        _die("--mcp-bridge-config requires --hook-control-socket")
     await _run(args)
 
 

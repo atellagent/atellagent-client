@@ -15,6 +15,7 @@ from atellagent_client.sdk.config import (
 )
 from atellagent_client.sdk.gateway.session import GatewaySession
 from atellagent_client.protocol.agent_identity import has_bound_principal_identity
+from atellagent_client.protocol.api import build_versioned_route
 from atellagent_client.protocol.agent_contracts import (
     ExternalIdentityEvidence,
     GovernanceCallContext,
@@ -163,6 +164,21 @@ class ExternalAgentGovernance:
             tool_call_id=tool_call_id,
             action_context={"action_key": f"mcp-bridge-{tool_call_id}"},
         )
+
+    async def mcp_catalog_async(self) -> Dict[str, Any]:
+        """Fetch this enrolled agent-control runtime's assigned MCP catalog."""
+
+        session, headers = await self._async_headers({})
+        response = await session.get(
+            f"{self.gateway_session.base_url}{build_versioned_route(self.config.api_version, '/agents/boundary/mcp-catalog')}",
+            headers=headers,
+        )
+        payload = response.json() if response.content else {}
+        if response.status_code >= 400:
+            self._raise_gateway_error(response.status_code, payload)
+        if not isinstance(payload, dict) or payload.get("success") is not True:
+            raise RuntimeError("gateway MCP catalog response is invalid")
+        return payload
 
     def _resolve_model_workflow_context_sync(
         self,

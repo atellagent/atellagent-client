@@ -18,7 +18,6 @@ from atellagent_client.integrations.agents.hook_control import (
     HookControlError,
     HookControlRuntime,
 )
-from atellagent_client.proxy import MCPProxyTool
 from atellagent_client.sdk.errors import PolicyViolationError
 from atellagent_client.governance import ActionDenied
 from atellagent_client.protocol.agent_contracts import GovernanceReceipt, ModelDecision
@@ -74,6 +73,17 @@ class _Governance:
         self.postflights = []
         self.postflight_failures = 0
         self.mcp_calls = []
+        self.mcp_catalog = {
+            "tools": [
+                {
+                    "name": "lookup",
+                    "description": "Look up a record.",
+                    "input_schema": {"type": "object", "properties": {}},
+                    "target_binding": "external-resource-id",
+                    "target_tool_name": "provider_lookup",
+                }
+            ]
+        }
         self.decision_delay_seconds = 0.0
         self.model = ModelDecision(
             outcome="allow",
@@ -126,6 +136,9 @@ class _Governance:
                 }
             }
         }
+
+    async def mcp_catalog_async(self):
+        return self.mcp_catalog
 
 
 class HookControlRuntimeTests(unittest.IsolatedAsyncioTestCase):
@@ -192,15 +205,6 @@ class HookControlRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 self.config,
                 socket_path=self.socket_path,
                 participant=self.participant,  # type: ignore[arg-type]
-                mcp_tools=(
-                    MCPProxyTool(
-                        name="lookup",
-                        description="Look up a record.",
-                        input_schema={"type": "object", "properties": {}},
-                        target_binding="external-resource-id",
-                        target_tool_name="provider_lookup",
-                    ),
-                ),
             )
         await self.runtime.start()
         result = await self.client.call(
@@ -214,7 +218,7 @@ class HookControlRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["content"][0]["text"], "record")
         self.assertEqual(self.governance.mcp_calls[0]["target_binding"], "external-resource-id")
         self.assertEqual(self.governance.mcp_calls[0]["tool_name"], "provider_lookup")
-        with self.assertRaisesRegex(HookControlError, "mcp_tool_not_configured"):
+        with self.assertRaisesRegex(HookControlError, "mcp_tool_not_assigned"):
             await self.client.call(
                 "mcp.invoke",
                 {

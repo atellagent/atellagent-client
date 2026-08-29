@@ -14,6 +14,14 @@ atellagent-cli ./hook-control.yaml \
   --hook-control-socket /run/user/<uid>/atellagent/control.sock
 ```
 
+To expose governed external MCP tools from the same Codex runtime, add
+`--mcp-bridge-config ./bridge.yaml`. The bridge configuration names that same
+absolute socket; the enrolled control service remains the sole local credential
+holder and fetches its assigned public tool catalog. Start from
+[`examples/config/local-mcp-bridge.yaml`](../examples/config/local-mcp-bridge.yaml).
+Do not use `tool-proxy.yaml`: that example is for a separately enrolled
+customer-MCP boundary.
+
 Use an absolute socket path in the host configuration. The adapter uses a
 seven-second local deadline; all templates below give the host an eight-second
 command timeout so an unavailable control service results in the adapter's

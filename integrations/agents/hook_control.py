@@ -110,7 +110,6 @@ class HookControlRuntime:
         *,
         socket_path: str,
         participant: Optional[ConnectedParticipant] = None,
-        mcp_tools: tuple[MCPProxyTool, ...] = (),
         rpc_timeout_seconds: float = 8.0,
         mcp_rpc_timeout_seconds: float = 305.0,
         postflight_attempts: int = 3,
@@ -133,9 +132,6 @@ class HookControlRuntime:
             config,
             session_provider=lambda: self.participant.session,
         )
-        self._mcp_tools = {tool.name: tool for tool in mcp_tools}
-        if len(self._mcp_tools) != len(mcp_tools):
-            raise ValueError("hook control MCP tool names must be unique")
         self.rpc_timeout_seconds = max(0.1, float(rpc_timeout_seconds))
         self.mcp_rpc_timeout_seconds = max(0.1, float(mcp_rpc_timeout_seconds))
         self.postflight_attempts = max(1, int(postflight_attempts))
@@ -274,7 +270,39 @@ class HookControlRuntime:
             return await self._postflight(raw_params)
         if method == "mcp.invoke":
             return await self._invoke_mcp(raw_params)
+        if method == "mcp.list":
+            return await self._list_mcp_tools(raw_params)
         raise HookControlError("unsupported_method")
+
+    async def _mcp_catalog(self) -> tuple[MCPProxyTool, ...]:
+        payload = await self.governance.mcp_catalog_async()
+        raw_tools = payload.get("tools")
+        if not isinstance(raw_tools, list):
+            raise HookControlError("mcp_catalog_invalid")
+        tools: list[MCPProxyTool] = []
+        names: set[str] = set()
+        for raw_tool in raw_tools:
+            if not isinstance(raw_tool, Mapping):
+                raise HookControlError("mcp_catalog_invalid")
+            tool = MCPProxyTool(
+                name=raw_tool.get("name", ""),
+                description=raw_tool.get("description", ""),
+                input_schema=raw_tool.get("input_schema", {}),
+                target_binding=raw_tool.get("target_binding", ""),
+                target_tool_name=raw_tool.get("target_tool_name", ""),
+            )
+            if tool.name in names:
+                raise HookControlError("mcp_catalog_invalid")
+            names.add(tool.name)
+            tools.append(tool)
+        return tuple(tools)
+
+    async def _list_mcp_tools(self, raw_params: Any) -> Dict[str, Any]:
+        if raw_params not in ({}, None):
+            raise HookControlError("invalid_mcp_list_params")
+        return {
+            "tools": [tool.as_mcp_tool() for tool in await self._mcp_catalog()],
+        }
 
     async def _invoke_mcp(self, raw_params: Any) -> Dict[str, Any]:
         params = _object(
@@ -287,9 +315,12 @@ class HookControlRuntime:
         if not isinstance(arguments, Mapping):
             raise HookControlError("invalid_arguments")
         tool_call_id = _identifier(params.get("tool_call_id"), "tool_call_id")
-        tool = self._mcp_tools.get(tool_name)
+        tool = next(
+            (item for item in await self._mcp_catalog() if item.name == tool_name),
+            None,
+        )
         if tool is None:
-            raise HookControlError("mcp_tool_not_configured")
+            raise HookControlError("mcp_tool_not_assigned")
         response = await self.governance.mcp_communicate_async(
             target_binding=tool.target_binding,
             tool_name=tool.target_tool_name,

@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Atellagent, Inc. All rights reserved.
 # This source code is licensed under the terms found in the LICENSE.md file in the root directory of this source tree.
 
-"""Bridge deliveries to a local stateless MCP 2026-07-28 target."""
+"""Run an enrolled Tool Proxy against a customer-local MCP 2026-07-28 target."""
 
 from __future__ import annotations
 
@@ -21,10 +21,12 @@ from atellagent_client.sdk.config import (
 
 
 async def run() -> None:
-    config_path = os.getenv("CONFIG_PATH") or bundled_example_path("config/mcp.yaml")
+    config_path = os.getenv("CONFIG_PATH") or bundled_example_path(
+        "config/tool-proxy.yaml"
+    )
     config = load_service_account_config_from_yaml(config_path)
     if not isinstance(config.deployment, BridgeDeploymentConfig):
-        raise ValueError("MCP bridge example requires bridge packaging")
+        raise ValueError("Tool Proxy example requires bridge packaging")
     target = LocalMCPClient(config.deployment)
     runtime = ConnectedBridge(config, mcp_manifest=await target.manifest())
     mount_mcp_handler(

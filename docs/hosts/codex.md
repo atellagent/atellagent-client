@@ -19,3 +19,12 @@ The adapter excludes `mcp__atellagent__*` facade calls because the actual MCP
 effect boundary governs those calls. Managed deployments can require managed
 hooks and reject user/project/session/plugin hook configuration; see the host
 guide.
+
+When Codex also uses `atellagent-mcp-bridge`, the bridge is a credential-free
+stdio adapter over the same owner-private hook-control socket. The control
+runtime, not the bridge process, owns the enrolled identity and reviewed MCP
+tool map.
+
+Codex command hooks require an explicit `network.allow_unix_sockets` entry
+for that exact socket path. Apply the bundled TOML template and fully restart
+Codex after changing hooks, MCP servers, or socket permissions.

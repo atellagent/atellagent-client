@@ -19,13 +19,20 @@ atellagent-cli ./hook-control.yaml \
   --hook-control-socket /run/user/<uid>/atellagent/control.sock
 ```
 
+For a local Codex MCP bridge, add
+`--mcp-bridge-config ./bridge.yaml`. That file contains the same absolute
+socket path. The stdio bridge is credential-free; this runtime uses its enrolled
+service-account session to fetch the assigned tool catalog. Start from
+[`examples/config/local-mcp-bridge.yaml`](../../examples/config/local-mcp-bridge.yaml),
+not `tool-proxy.yaml`, which is for a separately enrolled customer-MCP boundary.
+
 See [external host documentation](../../docs/HOST_HOOKS.md) for installation,
 coverage, and host bypass boundaries.
 
 The separate loopback [Anthropic Messages facade](../../docs/hosts/claude-code-route-mode.md)
 is a non-streaming route facade, not a Claude Code deployment: Claude Code
-needs event streaming. It retains the enrolled boundary
-inside the facade and does not replace the host-tool effect boundary.
+needs event streaming. It retains the enrolled boundary inside the facade and
+does not replace the host-tool effect boundary.
 
 The [OpenAI Responses facade](../../docs/hosts/codex-route-mode.md) provides
 the same non-streaming route facade. It is not a Codex custom-provider
