@@ -51,6 +51,7 @@ _HOST_CAPABILITY = "agent.control"
 _MCP_RPC_TIMEOUT_SECONDS = 30.0
 _PREFLIGHT_TIMEOUT_SECONDS = 4.0
 _DIRECTIVE_VERIFICATION_TIMEOUT_SECONDS = 2.0
+_OUTCOME_DELIVERY_TIMEOUT_SECONDS = 5.0
 _OUTBOX_RETRY_INTERVAL_SECONDS = 5.0
 _MODEL_DECISION_FAILURE_CODES = frozenset(
     {
@@ -846,7 +847,15 @@ class HookControlRuntime:
                             result_sha256=outcome.get("result_sha256"),
                             error_type=outcome.get("error_type"),
                         ),
-                        timeout=min(self.rpc_timeout_seconds, 1.5),
+                        # This is an asynchronous, durable post-execution
+                        # delivery—not a host-hook decision. It must not
+                        # inherit the tight preflight budget and manufacture
+                        # retries while Gateway is completing its ledger and
+                        # audit writes.
+                        timeout=min(
+                            self.rpc_timeout_seconds,
+                            _OUTCOME_DELIVERY_TIMEOUT_SECONDS,
+                        ),
                     )
                 except Exception as exc:
                     failure_code = _safe_outcome_delivery_error_code(exc)

@@ -97,9 +97,10 @@ administrator can modify the managed configuration and executable directory.
 
 ### macOS
 
-Use `examples/config/codex-hooks.macos.toml` on macOS. Start the downloaded
-dashboard runtime configuration with the same owner-private socket path before
-opening Codex:
+Use `examples/config/codex-hooks.macos.toml` on macOS. The template uses a
+dedicated PostToolUse launcher which relays the documented host event unchanged
+to the ordinary adapter. Start the downloaded dashboard runtime configuration
+with the same owner-private socket path before opening Codex:
 
 ```bash
 atellagent-cli ./downloaded-runtime.yaml \

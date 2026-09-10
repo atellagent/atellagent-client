@@ -446,3 +446,7 @@ __all__ = [
     "host_hook_capabilities",
     "main",
 ]
+
+
+if __name__ == "__main__":
+    main()

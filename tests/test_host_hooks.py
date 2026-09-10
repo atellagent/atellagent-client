@@ -8,10 +8,12 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+import sys
 import tomllib
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from atellagent_client.integrations.agents import codex_posttool
 from atellagent_client.integrations.agents import host_hooks
 from atellagent_client.integrations.agents.hook_control import HookControlError
 
@@ -257,6 +259,31 @@ class HostHookAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("turn_entry", docs)
         self.assertIn("Cowork", docs)
         self.assertIn("non-blocking", docs)
+
+    def test_codex_posttool_launcher_relays_bytes_to_adapter_module(self) -> None:
+        payload = b'{"hook_event_name":"PostToolUse","tool_response":{"ok":true}}'
+        completed = MagicMock(returncode=0)
+        with patch("sys.stdin") as stdin, patch(
+            "atellagent_client.integrations.agents.codex_posttool.subprocess.run",
+            return_value=completed,
+        ) as run:
+            stdin.buffer.read.return_value = payload
+            with self.assertRaises(SystemExit) as exited:
+                codex_posttool.main(["--socket", _SOCKET])
+        self.assertEqual(exited.exception.code, 0)
+        run.assert_called_once_with(
+            [
+                sys.executable,
+                "-m",
+                "atellagent_client.integrations.agents.host_hooks",
+                "--host",
+                "codex",
+                "--socket",
+                _SOCKET,
+            ],
+            input=payload,
+            check=False,
+        )
 
 
 if __name__ == "__main__":
