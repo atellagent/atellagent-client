@@ -1,0 +1,13 @@
+# Codex command hooks on macOS.  Permit only this owner-private control socket;
+# do not allow its parent directory or replace it with a TCP listener.
+[network]
+allow_unix_sockets = ["/private/tmp/atellagent-codex-hook-control/control.sock"]
+
+[[hooks.UserPromptSubmit]]
+hooks = [{ type = "command", command = "atellagent-hook-adapter --host codex --socket /private/tmp/atellagent-codex-hook-control/control.sock", timeout = 8 }]
+
+[[hooks.PreToolUse]]
+hooks = [{ type = "command", command = "atellagent-hook-adapter --host codex --socket /private/tmp/atellagent-codex-hook-control/control.sock", timeout = 8 }]
+
+[[hooks.PostToolUse]]
+hooks = [{ type = "command", command = "atellagent-hook-adapter --host codex --socket /private/tmp/atellagent-codex-hook-control/control.sock", timeout = 8 }]

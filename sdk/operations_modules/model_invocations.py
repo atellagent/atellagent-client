@@ -9,9 +9,7 @@ import asyncio
 import logging
 import random
 import time
-from typing import Any, Dict, List, Optional
-
-import httpx
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from atellagent_client.protocol.api import build_versioned_route
 from atellagent_client.sdk.telemetry import TelemetryEmitter, TelemetryEvent
@@ -73,7 +71,7 @@ def model_invocation_sync(
     *,
     base_url: str,
     api_version: str,
-    client: httpx.Client,
+    request: Callable[..., Any],
     headers: Dict[str, str],
     messages: List[Dict[str, Any]],
     stream: bool = False,
@@ -102,7 +100,7 @@ def model_invocation_sync(
     }
 
     start = time.perf_counter()
-    response = client.post(url, json=payload, headers=headers)
+    response = request("POST", url, json=payload, headers=headers)
 
     final_status = response.status_code
     data: Dict[str, Any] = {}
@@ -129,7 +127,7 @@ def model_invocation_sync(
                 raise TimeoutError(
                     f"Timed out waiting for model invocation result (request_id={request_id})"
                 )
-            poll_response = client.get(poll_url, headers=headers)
+            poll_response = request("GET", poll_url, headers=headers)
             final_status = poll_response.status_code
             if poll_response.status_code == 202:
                 time.sleep(
@@ -245,7 +243,7 @@ async def model_invocation_async(
     *,
     base_url: str,
     api_version: str,
-    session: httpx.AsyncClient,
+    request: Callable[..., Awaitable[Any]],
     headers: Dict[str, str],
     messages: List[Dict[str, Any]],
     stream: bool = False,
@@ -274,7 +272,7 @@ async def model_invocation_async(
     }
 
     start = time.perf_counter()
-    response = await session.post(url, json=payload, headers=headers)
+    response = await request("POST", url, json=payload, headers=headers)
     final_status = response.status_code
     data: Dict[str, Any] = {}
     if response.status_code == 202:
@@ -298,7 +296,7 @@ async def model_invocation_async(
                 raise TimeoutError(
                     f"Timed out waiting for model invocation result (request_id={request_id})"
                 )
-            poll_response = await session.get(poll_url, headers=headers)
+            poll_response = await request("GET", poll_url, headers=headers)
             final_status = poll_response.status_code
             if poll_response.status_code == 202:
                 await asyncio.sleep(

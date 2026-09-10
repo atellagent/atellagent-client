@@ -171,6 +171,20 @@ class HTTPClientManager:
             )
         return self._async_client
 
+    async def reset_async_client(self) -> None:
+        """Discard a broken pooled async transport without touching credentials."""
+
+        client, self._async_client = self._async_client, None
+        if client is not None:
+            await client.aclose()
+
+    def reset_sync_client(self) -> None:
+        """Discard a broken pooled sync transport without touching credentials."""
+
+        client, self._sync_client = self._sync_client, None
+        if client is not None:
+            client.close()
+
     def _track_async_close_task(self, task: asyncio.Task) -> None:
         self._pending_async_close_tasks.add(task)
 

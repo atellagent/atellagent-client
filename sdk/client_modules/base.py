@@ -6,42 +6,36 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping, Optional
 
 from atellagent_client.sdk.errors import AuthenticationError
 from atellagent_client.sdk.http import HTTPClientManager
 
 
 class ClientBaseMixin:
-    def _sync_clients(self):
-        client = self.http_client_manager.get_sync_client()
-        auth_client = (
-            self._oauth_http_client_manager.get_sync_client()
-            if self._oauth_http_client_manager
-            else client
+    def _request_gateway_sync(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Optional[Mapping[str, str]] = None,
+        **kwargs: Any,
+    ):
+        return self.gateway_session.request_authenticated_sync(
+            method, url, headers=headers, **kwargs
         )
-        return client, auth_client
 
-    async def _async_clients(self):
-        session = await self.http_client_manager.get_async_client()
-        auth_session = (
-            await self._oauth_http_client_manager.get_async_client()
-            if self._oauth_http_client_manager
-            else session
+    async def _request_gateway_async(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Optional[Mapping[str, str]] = None,
+        **kwargs: Any,
+    ):
+        return await self.gateway_session.request_authenticated(
+            method, url, headers=headers, **kwargs
         )
-        return session, auth_session
-
-    def _ensure_authenticated_sync(self):
-        client, auth_client = self._sync_clients()
-        if not self.auth_manager.ensure_authenticated_sync(auth_client):
-            raise AuthenticationError("Failed to authenticate")
-        return client
-
-    async def _ensure_authenticated_async(self):
-        session, auth_session = await self._async_clients()
-        if not await self.auth_manager.ensure_authenticated_async(auth_session):
-            raise AuthenticationError("Failed to authenticate")
-        return session
 
     def _require_channel_service_account(self, *, method_name: str) -> None:
         if not self.service_account_config:

@@ -15,17 +15,15 @@ from atellagent_client.protocol.context import (
     reset_workflow_context,
     set_workflow_context,
 )
-from atellagent_client.sdk.auth import AuthManager
 from atellagent_client.sdk.config import ServiceAccountConfig
+from atellagent_client.sdk.gateway.session import GatewaySession
 from ..operations import APIOperations
 from atellagent_client.sdk.telemetry import TelemetryEmitter
 from .agent_events import AgentEventsClientMixin
 from .base import ClientBaseMixin
 from .model_invocation_client import ModelInvocationClientMixin
 from .init_helpers import (
-    build_http_client_manager,
     build_telemetry_context,
-    resolve_base_url,
 )
 from .lifecycle import ClientLifecycleMixin
 from .mcp_tools import MCPToolsClientMixin
@@ -75,23 +73,15 @@ class AtellagentClient(
         """Initialize client with service account configuration."""
 
         self.service_account_config = service_account_config
-        self.auth_manager = AuthManager(service_account_config)
+        self.gateway_session = GatewaySession.from_service_account_config(
+            service_account_config
+        )
+        self.auth_manager = self.gateway_session.auth_manager
         self.telemetry_emitter = telemetry_emitter
-
-        base_url = resolve_base_url(
-            service_account_config=service_account_config,
-        )
-        (
-            self.http_client_manager,
-            self._oauth_http_client_manager,
-        ) = build_http_client_manager(
-            auth_manager=self.auth_manager,
-            base_url=base_url,
-            service_account_config=service_account_config,
-            timeout=timeout,
-        )
+        self.http_client_manager = self.gateway_session.http_client_manager
+        self._oauth_http_client_manager = self.gateway_session.oauth_http_client_manager
         self.operations = APIOperations(
-            base_url,
+            self.gateway_session.base_url,
             api_version=service_account_config.api_version,
             contract_version=service_account_config.contract_version,
             client_version=CLIENT_LIBRARY_VERSION,

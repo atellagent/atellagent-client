@@ -11,7 +11,6 @@ import os
 import random
 import socket
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Set, Union
 
@@ -112,6 +111,7 @@ class ConnectedParticipant(ConnectedDeliveryMixin, ConnectedCertificateRotationM
         self._instance_id: Optional[str] = None
         self._native_hook_posture: Optional[str] = None
         self._native_hook_observe_offline_permits = 0
+        self._native_hook_event_receipts: list[dict[str, object]] = []
         self._registration_lock = asyncio.Lock()
         self._stop_event = asyncio.Event()
         self._receive_enabled = asyncio.Event()
@@ -138,6 +138,20 @@ class ConnectedParticipant(ConnectedDeliveryMixin, ConnectedCertificateRotationM
         if normalized < 0 or normalized > 1_000_000:
             raise ValueError("observe_offline_permits is outside the accepted range")
         self._native_hook_observe_offline_permits = normalized
+
+    def set_native_hook_event_receipts(
+        self, *, event_receipts: list[dict[str, object]]
+    ) -> None:
+        """Publish bounded local hook-health receipts on the next heartbeat."""
+
+        if len(event_receipts) > 3:
+            raise ValueError("native hook event receipt count exceeds the accepted limit")
+        normalized: list[dict[str, object]] = []
+        for receipt in event_receipts:
+            if not isinstance(receipt, dict):
+                raise ValueError("native hook event receipt must be an object")
+            normalized.append(dict(receipt))
+        self._native_hook_event_receipts = normalized
 
     async def enforce_local_action(
         self,
@@ -406,6 +420,7 @@ class ConnectedParticipant(ConnectedDeliveryMixin, ConnectedCertificateRotationM
                 if self._native_hook_posture:
                     heartbeat_payload["native_hook_coverage_health"] = {
                         "observe_offline_permits": self._native_hook_observe_offline_permits,
+                        "event_receipts": self._native_hook_event_receipts,
                     }
                 response = await self._request(
                     "POST", self.config.heartbeat_path_template,

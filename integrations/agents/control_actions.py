@@ -29,6 +29,7 @@ from .identity_mode import FEDERATED_AGENT_IDENTITY
 _BOOTSTRAP_PATH = "/agents/bootstrap-principal"
 _PREFLIGHT_PATH = "/agents/boundary/preflight"
 _POSTFLIGHT_PATH = "/agents/boundary/postflight"
+_NATIVE_HOOK_OUTCOME_PATH = "/agents/boundary/native-hook/outcome"
 
 
 def _normalize_optional_text(value: Any) -> Optional[str]:
@@ -56,11 +57,11 @@ def bootstrap_sync(
     governance: Any,
     identity: ExternalIdentityEvidence,
 ) -> BoundaryBootstrapResponse:
-    client, headers = governance._sync_headers({})
-    response = client.post(
+    response = governance._request_gateway_sync(
+        "POST",
         f"{governance.gateway_session.base_url}{build_versioned_route(governance.config.api_version, _BOOTSTRAP_PATH)}",
+        workflow_context={},
         json=build_bootstrap_payload(identity=identity),
-        headers=headers,
     )
     payload = response.json() if response.content else {}
     if response.status_code >= 400:
@@ -72,11 +73,11 @@ async def bootstrap_async(
     governance: Any,
     identity: ExternalIdentityEvidence,
 ) -> BoundaryBootstrapResponse:
-    session, headers = await governance._async_headers({})
-    response = await session.post(
+    response = await governance._request_gateway_async(
+        "POST",
         f"{governance.gateway_session.base_url}{build_versioned_route(governance.config.api_version, _BOOTSTRAP_PATH)}",
+        workflow_context={},
         json=build_bootstrap_payload(identity=identity),
-        headers=headers,
     )
     payload = response.json() if response.content else {}
     if response.status_code >= 400:
@@ -101,15 +102,15 @@ def preflight_sync(governance: Any, context: GovernanceCallContext) -> Governanc
         explicit_context=context.workflow_context,
         principal_context=principal_context,
     )
-    client, headers = governance._sync_headers(workflow_context)
-    response = client.post(
+    response = governance._request_gateway_sync(
+        "POST",
         f"{governance.gateway_session.base_url}{build_versioned_route(governance.config.api_version, _PREFLIGHT_PATH)}",
+        workflow_context=workflow_context,
         json=build_preflight_payload(
             context=context,
             workflow_context=workflow_context,
             identity_forward=identity_forward,
         ),
-        headers=headers,
     )
     payload = response.json() if response.content else {}
     if response.status_code >= 400:
@@ -141,15 +142,15 @@ async def preflight_async(governance: Any, context: GovernanceCallContext) -> Go
         explicit_context=context.workflow_context,
         principal_context=principal_context,
     )
-    session, headers = await governance._async_headers(workflow_context)
-    response = await session.post(
+    response = await governance._request_gateway_async(
+        "POST",
         f"{governance.gateway_session.base_url}{build_versioned_route(governance.config.api_version, _PREFLIGHT_PATH)}",
+        workflow_context=workflow_context,
         json=build_preflight_payload(
             context=context,
             workflow_context=workflow_context,
             identity_forward=identity_forward,
         ),
-        headers=headers,
     )
     payload = response.json() if response.content else {}
     if response.status_code >= 400:
@@ -176,9 +177,10 @@ def postflight_sync(
     evidence: Optional[Dict[str, Any]] = None,
     resource: Optional[Dict[str, Any]] = None,
 ) -> None:
-    client, headers = governance._sync_headers(receipt.workflow_context)
-    response = client.post(
+    response = governance._request_gateway_sync(
+        "POST",
         f"{governance.gateway_session.base_url}{build_versioned_route(governance.config.api_version, _POSTFLIGHT_PATH)}",
+        workflow_context=receipt.workflow_context,
         json=build_postflight_payload(
             context=context,
             receipt=receipt,
@@ -189,7 +191,6 @@ def postflight_sync(
             evidence=evidence,
             resource=resource,
         ),
-        headers=headers,
     )
     payload = response.json() if response.content else {}
     if response.status_code >= 400:
@@ -208,9 +209,10 @@ async def postflight_async(
     evidence: Optional[Dict[str, Any]] = None,
     resource: Optional[Dict[str, Any]] = None,
 ) -> None:
-    session, headers = await governance._async_headers(receipt.workflow_context)
-    response = await session.post(
+    response = await governance._request_gateway_async(
+        "POST",
         f"{governance.gateway_session.base_url}{build_versioned_route(governance.config.api_version, _POSTFLIGHT_PATH)}",
+        workflow_context=receipt.workflow_context,
         json=build_postflight_payload(
             context=context,
             receipt=receipt,
@@ -221,7 +223,43 @@ async def postflight_async(
             evidence=evidence,
             resource=resource,
         ),
-        headers=headers,
+    )
+    payload = response.json() if response.content else {}
+    if response.status_code >= 400:
+        governance._raise_gateway_error(response.status_code, payload)
+
+
+async def native_hook_outcome_async(
+    governance: Any,
+    *,
+    action_key: str,
+    action_binding_fingerprint: str,
+    outcome_observation: str,
+    success: Optional[bool],
+    result_byte_length: Optional[int] = None,
+    result_sha256: Optional[str] = None,
+    error_type: Optional[str] = None,
+) -> None:
+    """Persist a supported host-hook outcome without resending tool inputs.
+
+    The enrolled boundary authenticates this request.  Gateway reloads and
+    verifies the preflight-owned action state, including the opaque binding
+    digest, before accepting the bounded observation.
+    """
+
+    response = await governance._request_gateway_async(
+        "POST",
+        f"{governance.gateway_session.base_url}{build_versioned_route(governance.config.api_version, _NATIVE_HOOK_OUTCOME_PATH)}",
+        workflow_context={},
+        json={
+            "action_key": action_key,
+            "action_binding_fingerprint": action_binding_fingerprint,
+            "outcome_observation": outcome_observation,
+            "success": success,
+            "result_byte_length": result_byte_length,
+            "result_sha256": result_sha256,
+            "error_type": error_type,
+        },
     )
     payload = response.json() if response.content else {}
     if response.status_code >= 400:
@@ -387,6 +425,7 @@ __all__ = [
     "execute_sync",
     "guardrail_async",
     "guardrail_sync",
+    "native_hook_outcome_async",
     "postflight_async",
     "postflight_sync",
     "preflight_async",

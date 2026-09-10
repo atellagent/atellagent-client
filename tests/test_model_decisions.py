@@ -22,6 +22,7 @@ from atellagent_client.integrations.agents.control_model_invocation import (
 )
 from atellagent_client.governance import ActionDenied
 from atellagent_client.sdk.config_models import SDKDeploymentConfig, ServiceAccountConfig
+from atellagent_client.sdk.errors import PolicyTransportError
 
 
 class ModelDecisionContractTests(unittest.TestCase):
@@ -51,13 +52,6 @@ class ModelDecisionContractTests(unittest.TestCase):
                     "request_fingerprint": request.request_fingerprint,
                 }
 
-        class Session:
-            async def post(self, _url, *, json, headers):
-                if json != request.to_payload():
-                    raise AssertionError("model decision payload changed in transit")
-                observed_headers.update(headers)
-                return Response()
-
         class Governance:
             identity_mode = "boundary_identity_only"
 
@@ -66,8 +60,17 @@ class ModelDecisionContractTests(unittest.TestCase):
                 return dict(explicit_context or {})
 
             @staticmethod
-            async def _async_headers(_context):
-                return Session(), {"Authorization": "Bearer test"}
+            async def _request_gateway_async(
+                method, _url, *, workflow_context, json, request_headers
+            ):
+                if method != "POST":
+                    raise AssertionError("model decision must use POST")
+                if json != request.to_payload():
+                    raise AssertionError("model decision payload changed in transit")
+                if workflow_context:
+                    raise AssertionError("unexpected workflow context")
+                observed_headers.update(request_headers)
+                return Response()
 
             @staticmethod
             def _raise_gateway_error(_status_code, _payload):
@@ -85,6 +88,48 @@ class ModelDecisionContractTests(unittest.TestCase):
         self.assertEqual(
             observed_headers["X-Atellagent-Action-Key"],
             f"model-decision:{request.request_fingerprint}",
+        )
+
+    def test_model_decision_nonpolicy_client_status_has_a_safe_code(self) -> None:
+        request = ModelDecisionRequest(
+            input_scope="turn_entry",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+        class Response:
+            status_code = 422
+            content = b"{}"
+
+            @staticmethod
+            def json():
+                return {}
+
+        class Governance:
+            identity_mode = "boundary_identity_only"
+            gateway_session = SimpleNamespace(base_url="https://gateway.example")
+            config = SimpleNamespace(api_version="v1")
+
+            @staticmethod
+            def _merge_context(*, explicit_context, principal_context=None):
+                return dict(explicit_context or {})
+
+            @staticmethod
+            def _has_bound_principal_context(_context):
+                return False
+
+            @staticmethod
+            async def _request_gateway_async(*_args, **_kwargs):
+                return Response()
+
+            @staticmethod
+            def _raise_gateway_error(_status_code, _payload):
+                raise RuntimeError("redacted gateway response")
+
+        with self.assertRaises(PolicyTransportError) as raised:
+            asyncio.run(model_decision_async(Governance(), request=request))
+        self.assertEqual(
+            getattr(raised.exception, "safe_code", None),
+            "model_decision_gateway_client_status",
         )
 
     def test_turn_entry_never_serializes_provider_or_model(self) -> None:

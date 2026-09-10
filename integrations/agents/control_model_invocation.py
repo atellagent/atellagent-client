@@ -19,13 +19,43 @@ from atellagent_client.sdk.client import reset_workflow_context, set_workflow_co
 from atellagent_client.sdk.operations_modules.invocation_errors import (
     raise_forbidden_invocation_error,
 )
-from atellagent_client.sdk.errors import PolicyTransportError, PolicyViolationError
+from atellagent_client.sdk.errors import (
+    AuthenticationError,
+    PolicyTransportError,
+    PolicyViolationError,
+)
 
 from .identity_mode import FEDERATED_AGENT_IDENTITY
 
 _MODEL_INVOCATIONS_PATH = "/model-invocations"
 _MODEL_DECISIONS_PATH = "/model-decisions"
 _MODEL_DECISION_ACTION_KEY_PREFIX = "model-decision:"
+
+
+class _ModelDecisionTransportError(PolicyTransportError):
+    """A model-decision failure with a safe hook-control diagnostic code."""
+
+    def __init__(self, safe_code: str) -> None:
+        super().__init__("model decision unavailable")
+        self.safe_code = safe_code
+
+
+def _response_payload(response: Any) -> Dict[str, Any]:
+    try:
+        payload = response.json() if response.content else {}
+    except (TypeError, ValueError) as exc:
+        raise _ModelDecisionTransportError(
+            "model_decision_gateway_response_invalid"
+        ) from exc
+    return payload if isinstance(payload, dict) else {}
+
+
+def _gateway_status_code(status_code: int) -> str:
+    if 400 <= status_code < 500:
+        return "model_decision_gateway_client_status"
+    if 500 <= status_code < 600:
+        return "model_decision_gateway_server_status"
+    return "model_decision_gateway_status"
 
 
 def _coerce_dict(value: Any) -> Dict[str, Any]:
@@ -183,28 +213,37 @@ def model_decision_sync(
     context = resolve_model_decision_context_sync(
         governance, workflow_context=workflow_context, identity=identity
     )
-    client, headers = governance._sync_headers(context)
     try:
-        response = client.post(
+        response = governance._request_gateway_sync(
+            "POST",
             f"{governance.gateway_session.base_url}"
             f"{build_versioned_route(governance.config.api_version, _MODEL_DECISIONS_PATH)}",
+            workflow_context=context,
             json=request.to_payload(),
-            headers=_model_decision_headers(headers, request),
+            request_headers=_model_decision_headers({}, request),
         )
+    except AuthenticationError as exc:
+        raise _ModelDecisionTransportError("model_decision_gateway_auth") from exc
     except Exception as exc:
-        raise PolicyTransportError("model decision transport unavailable") from exc
-    payload = response.json() if response.content else {}
+        raise _ModelDecisionTransportError("model_decision_gateway_transport") from exc
+    payload = _response_payload(response)
     if response.status_code != 200:
+        if response.status_code == 401:
+            raise _ModelDecisionTransportError("model_decision_gateway_auth")
         try:
             governance._raise_gateway_error(response.status_code, payload)
         except PolicyViolationError:
             raise
         except Exception as exc:
-            raise PolicyTransportError("model decision transport failed") from exc
+            raise _ModelDecisionTransportError(
+                _gateway_status_code(response.status_code)
+            ) from exc
     try:
         return ModelDecision.from_payload(payload)
     except ValueError as exc:
-        raise PolicyTransportError("model decision response was invalid") from exc
+        raise _ModelDecisionTransportError(
+            "model_decision_gateway_response_invalid"
+        ) from exc
 
 
 async def model_decision_async(
@@ -217,28 +256,37 @@ async def model_decision_async(
     context = await resolve_model_decision_context_async(
         governance, workflow_context=workflow_context, identity=identity
     )
-    session, headers = await governance._async_headers(context)
     try:
-        response = await session.post(
+        response = await governance._request_gateway_async(
+            "POST",
             f"{governance.gateway_session.base_url}"
             f"{build_versioned_route(governance.config.api_version, _MODEL_DECISIONS_PATH)}",
+            workflow_context=context,
             json=request.to_payload(),
-            headers=_model_decision_headers(headers, request),
+            request_headers=_model_decision_headers({}, request),
         )
+    except AuthenticationError as exc:
+        raise _ModelDecisionTransportError("model_decision_gateway_auth") from exc
     except Exception as exc:
-        raise PolicyTransportError("model decision transport unavailable") from exc
-    payload = response.json() if response.content else {}
+        raise _ModelDecisionTransportError("model_decision_gateway_transport") from exc
+    payload = _response_payload(response)
     if response.status_code != 200:
+        if response.status_code == 401:
+            raise _ModelDecisionTransportError("model_decision_gateway_auth")
         try:
             governance._raise_gateway_error(response.status_code, payload)
         except PolicyViolationError:
             raise
         except Exception as exc:
-            raise PolicyTransportError("model decision transport failed") from exc
+            raise _ModelDecisionTransportError(
+                _gateway_status_code(response.status_code)
+            ) from exc
     try:
         return ModelDecision.from_payload(payload)
     except ValueError as exc:
-        raise PolicyTransportError("model decision response was invalid") from exc
+        raise _ModelDecisionTransportError(
+            "model_decision_gateway_response_invalid"
+        ) from exc
 
 
 def build_model_invocation_payload(
@@ -285,12 +333,13 @@ def invoke_model_sync(
     poll_timeout_seconds: float = 300.0,
     poll_interval_seconds: float = 0.5,
 ) -> Dict[str, Any]:
-    client, headers = governance._sync_headers(workflow_context)
     url = (
         f"{governance.gateway_session.base_url}"
         f"{build_versioned_route(governance.config.api_version, _MODEL_INVOCATIONS_PATH)}"
     )
-    response = client.post(url, json=payload, headers=headers)
+    response = governance._request_gateway_sync(
+        "POST", url, workflow_context=workflow_context, json=payload
+    )
     if response.status_code == 200:
         return response.json() if response.content else {}
     if response.status_code == 403:
@@ -315,7 +364,9 @@ def invoke_model_sync(
             raise TimeoutError(
                 f"Timed out waiting for model invocation result (request_id={request_id})"
             )
-        poll_response = client.get(poll_url, headers=headers)
+        poll_response = governance._request_gateway_sync(
+            "GET", poll_url, workflow_context=workflow_context
+        )
         poll_payload = poll_response.json() if poll_response.content else {}
         if poll_response.status_code == 202:
             time.sleep(max(0.1, float(poll_interval_seconds)))
@@ -341,12 +392,13 @@ async def invoke_model_async(
     poll_timeout_seconds: float = 300.0,
     poll_interval_seconds: float = 0.5,
 ) -> Dict[str, Any]:
-    session, headers = await governance._async_headers(workflow_context)
     url = (
         f"{governance.gateway_session.base_url}"
         f"{build_versioned_route(governance.config.api_version, _MODEL_INVOCATIONS_PATH)}"
     )
-    response = await session.post(url, json=payload, headers=headers)
+    response = await governance._request_gateway_async(
+        "POST", url, workflow_context=workflow_context, json=payload
+    )
     if response.status_code == 200:
         return response.json() if response.content else {}
     if response.status_code == 403:
@@ -371,7 +423,9 @@ async def invoke_model_async(
             raise TimeoutError(
                 f"Timed out waiting for model invocation result (request_id={request_id})"
             )
-        poll_response = await session.get(poll_url, headers=headers)
+        poll_response = await governance._request_gateway_async(
+            "GET", poll_url, workflow_context=workflow_context
+        )
         poll_payload = poll_response.json() if poll_response.content else {}
         if poll_response.status_code == 202:
             await asyncio.sleep(max(0.1, float(poll_interval_seconds)))

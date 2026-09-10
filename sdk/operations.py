@@ -7,9 +7,7 @@ API operations facade for the Atellagent SDK.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-
-import httpx
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from atellagent_client.protocol.api import (
     CLIENT_LIBRARY_VERSION,
@@ -92,7 +90,7 @@ class APIOperations:
 
     def invoke_model_sync(
         self,
-        client: httpx.Client,
+        request: Callable[..., Any],
         headers: Dict[str, str],
         messages: List[Dict[str, Any]],
         stream: bool = False,
@@ -103,7 +101,7 @@ class APIOperations:
         return _model_invocation_sync(
             base_url=self.base_url,
             api_version=self.api_version,
-            client=client,
+            request=request,
             headers=self.apply_compat_headers(headers),
             messages=messages,
             stream=stream,
@@ -114,7 +112,7 @@ class APIOperations:
 
     def mcp_communicate_sync(
         self,
-        client: httpx.Client,
+        request: Callable[..., Any],
         headers: Dict[str, str],
         source_agent: str,
         target_agent: str,
@@ -132,7 +130,7 @@ class APIOperations:
         return _mcp_communicate_sync(
             base_url=self.base_url,
             api_version=self.api_version,
-            client=client,
+            request=request,
             headers=self.apply_compat_headers(headers),
             source_agent=source_agent,
             target_agent=target_agent,
@@ -150,7 +148,7 @@ class APIOperations:
 
     async def invoke_model_async(
         self,
-        session: httpx.AsyncClient,
+        request: Callable[..., Awaitable[Any]],
         headers: Dict[str, str],
         messages: List[Dict[str, Any]],
         stream: bool = False,
@@ -161,7 +159,7 @@ class APIOperations:
         return await _model_invocation_async(
             base_url=self.base_url,
             api_version=self.api_version,
-            session=session,
+            request=request,
             headers=self.apply_compat_headers(headers),
             messages=messages,
             stream=stream,
@@ -172,7 +170,7 @@ class APIOperations:
 
     async def mcp_communicate_async(
         self,
-        session: httpx.AsyncClient,
+        request: Callable[..., Awaitable[Any]],
         headers: Dict[str, str],
         source_agent: str,
         target_agent: str,
@@ -190,7 +188,7 @@ class APIOperations:
         return await _mcp_communicate_async(
             base_url=self.base_url,
             api_version=self.api_version,
-            session=session,
+            request=request,
             headers=self.apply_compat_headers(headers),
             source_agent=source_agent,
             target_agent=target_agent,
@@ -208,7 +206,7 @@ class APIOperations:
 
     def channel_ingress_sync(
         self,
-        client: httpx.Client,
+        request: Callable[..., Any],
         headers: Dict[str, str],
         *,
         event: Dict[str, Any],
@@ -225,7 +223,7 @@ class APIOperations:
         return _channel_ingress_sync(
             base_url=self.base_url,
             api_version=self.api_version,
-            client=client,
+            request=request,
             headers=self.apply_compat_headers(headers),
             event=event,
             target=target,
@@ -241,7 +239,7 @@ class APIOperations:
 
     async def channel_ingress_async(
         self,
-        session: httpx.AsyncClient,
+        request: Callable[..., Awaitable[Any]],
         headers: Dict[str, str],
         *,
         event: Dict[str, Any],
@@ -258,7 +256,7 @@ class APIOperations:
         return await _channel_ingress_async(
             base_url=self.base_url,
             api_version=self.api_version,
-            session=session,
+            request=request,
             headers=self.apply_compat_headers(headers),
             event=event,
             target=target,
@@ -274,28 +272,28 @@ class APIOperations:
 
     def emit_agent_event_sync(
         self,
-        client: httpx.Client,
+        request: Callable[..., Any],
         headers: Dict[str, str],
         payload: Dict[str, Any],
     ) -> Dict[str, Any]:
         return _emit_agent_event_sync(
             base_url=self.base_url,
             api_version=self.api_version,
-            client=client,
+            request=request,
             headers=self.apply_compat_headers(headers),
             payload=payload,
         )
 
     async def emit_agent_event_async(
         self,
-        session: httpx.AsyncClient,
+        request: Callable[..., Awaitable[Any]],
         headers: Dict[str, str],
         payload: Dict[str, Any],
     ) -> Dict[str, Any]:
         return await _emit_agent_event_async(
             base_url=self.base_url,
             api_version=self.api_version,
-            session=session,
+            request=request,
             headers=self.apply_compat_headers(headers),
             payload=payload,
         )

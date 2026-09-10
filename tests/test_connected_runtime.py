@@ -10,6 +10,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
+import httpx
+
 from atellagent_client.connected import (
     ConnectedBridge,
     ConnectedDelivery,
@@ -667,6 +669,88 @@ class ConnectedRuntimeTests(unittest.IsolatedAsyncioTestCase):
             [request[2]["headers"]["Authorization"] for request in client.requests],
             ["Bearer stale", "Bearer fresh"],
         )
+
+    async def test_transient_gateway_transport_error_resets_and_retries_once(self) -> None:
+        first_client = SimpleNamespace(request=AsyncMock(side_effect=httpx.ReadError("read failed")))
+        second_client = SimpleNamespace(request=AsyncMock(return_value=_Response(204, None)))
+        manager = SimpleNamespace(reset_async_client=AsyncMock())
+        session = GatewaySession(
+            config=_config(),
+            auth_manager=SimpleNamespace(invalidate_token=Mock()),
+            http_client_manager=manager,
+            oauth_http_client_manager=SimpleNamespace(),
+            base_url="https://mtls.gateway.example",
+        )
+        session.get_authenticated_request_context = AsyncMock(
+            side_effect=[
+                (first_client, {"Authorization": "Bearer current"}),
+                (second_client, {"Authorization": "Bearer current"}),
+            ]
+        )
+
+        response = await session.request_authenticated(
+            "POST", "https://mtls.gateway.example/heartbeat", json={}
+        )
+
+        self.assertEqual(response.status_code, 204)
+        manager.reset_async_client.assert_awaited_once_with()
+        self.assertEqual(first_client.request.await_count, 1)
+        self.assertEqual(second_client.request.await_count, 1)
+
+    def test_sync_request_refreshes_a_rejected_cached_oauth_token_once(self) -> None:
+        client = SimpleNamespace(request=Mock(side_effect=[_Response(401, {}), _Response(204, None)]))
+        auth = SimpleNamespace(invalidate_token=Mock())
+        session = GatewaySession(
+            config=_config(),
+            auth_manager=auth,
+            http_client_manager=SimpleNamespace(),
+            oauth_http_client_manager=SimpleNamespace(),
+            base_url="https://mtls.gateway.example",
+        )
+        session.get_authenticated_request_context_sync = Mock(
+            side_effect=[
+                (client, {"Authorization": "Bearer stale"}),
+                (client, {"Authorization": "Bearer fresh"}),
+            ]
+        )
+
+        response = session.request_authenticated_sync(
+            "POST", "https://mtls.gateway.example/heartbeat", json={}
+        )
+
+        self.assertEqual(response.status_code, 204)
+        auth.invalidate_token.assert_called_once_with()
+        self.assertEqual(
+            [call.kwargs["headers"]["Authorization"] for call in client.request.call_args_list],
+            ["Bearer stale", "Bearer fresh"],
+        )
+
+    def test_sync_request_resets_and_retries_one_transport_failure(self) -> None:
+        first_client = SimpleNamespace(request=Mock(side_effect=httpx.ReadError("read failed")))
+        second_client = SimpleNamespace(request=Mock(return_value=_Response(204, None)))
+        manager = SimpleNamespace(reset_sync_client=Mock())
+        session = GatewaySession(
+            config=_config(),
+            auth_manager=SimpleNamespace(invalidate_token=Mock()),
+            http_client_manager=manager,
+            oauth_http_client_manager=SimpleNamespace(),
+            base_url="https://mtls.gateway.example",
+        )
+        session.get_authenticated_request_context_sync = Mock(
+            side_effect=[
+                (first_client, {"Authorization": "Bearer current"}),
+                (second_client, {"Authorization": "Bearer current"}),
+            ]
+        )
+
+        response = session.request_authenticated_sync(
+            "POST", "https://mtls.gateway.example/heartbeat", json={}
+        )
+
+        self.assertEqual(response.status_code, 204)
+        manager.reset_sync_client.assert_called_once_with()
+        self.assertEqual(first_client.request.call_count, 1)
+        self.assertEqual(second_client.request.call_count, 1)
 
 if __name__ == "__main__":
     unittest.main()

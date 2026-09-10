@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional, Tuple
 
+import httpx
+
 from atellagent_client.protocol.api import (
     CLIENT_LIBRARY_VERSION,
     build_client_compat_headers,
@@ -17,6 +19,7 @@ from atellagent_client.protocol.api import (
 )
 from atellagent_client.sdk.auth import AuthManager
 from atellagent_client.sdk.config import ServiceAccountConfig
+from atellagent_client.sdk.errors import AuthenticationError
 from atellagent_client.sdk.http import HTTPClientManager
 from atellagent_client.sdk.tls import (
     build_gateway_cert_validator,
@@ -87,20 +90,63 @@ class GatewaySession:
     ) -> object:
         """Send once, refreshing a rejected cached access token exactly once."""
         extra_headers = dict(headers or {})
-        for attempt in range(2):
+        refreshed_token = False
+        retried_transport = False
+        while True:
             client, auth_headers = await self.get_authenticated_request_context()
             if client is None or auth_headers is None:
-                raise RuntimeError("service-account authentication failed")
-            response = await client.request(
-                method,
-                url,
-                headers={**auth_headers, **extra_headers},
-                **kwargs,
-            )
-            if response.status_code != 401 or attempt == 1:
+                raise AuthenticationError("service-account authentication failed")
+            try:
+                response = await client.request(
+                    method,
+                    url,
+                    headers={**auth_headers, **extra_headers},
+                    **kwargs,
+                )
+            except httpx.TransportError:
+                if retried_transport:
+                    raise
+                retried_transport = True
+                await self.http_client_manager.reset_async_client()
+                continue
+            if response.status_code != 401 or refreshed_token:
                 return response
+            refreshed_token = True
             self.auth_manager.invalidate_token()
-        raise RuntimeError("unreachable authenticated request state")
+
+    def request_authenticated_sync(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Optional[Mapping[str, str]] = None,
+        **kwargs: Any,
+    ) -> object:
+        """Send once, refreshing a rejected cached access token exactly once."""
+        extra_headers = dict(headers or {})
+        refreshed_token = False
+        retried_transport = False
+        while True:
+            client, auth_headers = self.get_authenticated_request_context_sync()
+            if client is None or auth_headers is None:
+                raise AuthenticationError("service-account authentication failed")
+            try:
+                response = client.request(
+                    method,
+                    url,
+                    headers={**auth_headers, **extra_headers},
+                    **kwargs,
+                )
+            except httpx.TransportError:
+                if retried_transport:
+                    raise
+                retried_transport = True
+                self.http_client_manager.reset_sync_client()
+                continue
+            if response.status_code != 401 or refreshed_token:
+                return response
+            refreshed_token = True
+            self.auth_manager.invalidate_token()
 
     def get_authenticated_request_context_sync(
         self,

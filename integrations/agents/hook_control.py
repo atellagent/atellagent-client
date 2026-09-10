@@ -12,12 +12,16 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from dataclasses import dataclass
+import errno
+import fcntl
+from hashlib import sha256
 import json
+import logging
 import os
 from pathlib import Path
 import re
 import stat
+from time import monotonic
 from typing import Any, Dict, Mapping, Optional
 
 import httpx
@@ -26,7 +30,6 @@ from atellagent_client.connected import ConnectedParticipant
 from atellagent_client.governance import ActionDenied
 from atellagent_client.protocol.agent_contracts import (
     GovernanceCallContext,
-    GovernanceReceipt,
     ModelDecisionRequest,
 )
 from atellagent_client.sdk.config import ServiceAccountConfig
@@ -36,6 +39,8 @@ from atellagent_client.sdk.client_modules.mcp_tools import _mcp_tool_result
 
 from .control import ExternalAgentGovernance
 from .hook_control_protocol import HookControlClient, HookControlError
+from .hook_health import HookEventHealth
+from .hook_outbox import HookOutcomeCorrelationUnavailable, HookOutcomeOutbox
 from .native_hook_posture import NativeHookPostureCache
 
 
@@ -43,18 +48,21 @@ HOOK_CONTROL_PROTOCOL = "atellagent.hook-control.v1"
 _MAX_REQUEST_BYTES = 64 * 1024
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$")
 _HOST_CAPABILITY = "agent.control"
-
-
-@dataclass(frozen=True)
-class _PendingAction:
-    context: GovernanceCallContext
-    receipt: GovernanceReceipt
-    success: Optional[bool] = None
-    result_payload: Any = None
-    error_message: Optional[str] = None
-    error_type: Optional[str] = None
-    evidence: Optional[Dict[str, Any]] = None
-    postflight_received: bool = False
+_MCP_RPC_TIMEOUT_SECONDS = 30.0
+_PREFLIGHT_TIMEOUT_SECONDS = 4.0
+_DIRECTIVE_VERIFICATION_TIMEOUT_SECONDS = 2.0
+_OUTBOX_RETRY_INTERVAL_SECONDS = 5.0
+_MODEL_DECISION_FAILURE_CODES = frozenset(
+    {
+        "model_decision_gateway_auth",
+        "model_decision_gateway_client_status",
+        "model_decision_gateway_response_invalid",
+        "model_decision_gateway_server_status",
+        "model_decision_gateway_status",
+        "model_decision_gateway_transport",
+    }
+)
+_LOGGER = logging.getLogger(__name__)
 
 
 def _identifier(value: Any, field_name: str) -> str:
@@ -98,8 +106,47 @@ def _safe_error_code(exc: Exception, *, default: str = "control_unavailable") ->
     if isinstance(exc, ActionDenied):
         return exc.reason_code
     if isinstance(exc, PolicyTransportError):
-        return "control_unavailable"
+        safe_code = getattr(exc, "safe_code", None)
+        if safe_code == "control_gateway_server_status":
+            return safe_code
+        if safe_code in _MODEL_DECISION_FAILURE_CODES:
+            return safe_code
+        return "model_decision_transport_failure"
     return default
+
+
+def _safe_outcome_delivery_error_code(exc: Exception) -> str:
+    """Classify retry failures without retaining endpoint responses or action data."""
+
+    if isinstance(exc, asyncio.TimeoutError):
+        return "outcome_delivery_timeout"
+    if isinstance(exc, PolicyViolationError):
+        return "outcome_delivery_policy_rejected"
+    if isinstance(exc, PolicyTransportError):
+        if getattr(exc, "safe_code", None) == "control_gateway_server_status":
+            return "outcome_delivery_gateway_server_status"
+        return "outcome_delivery_transport"
+    if isinstance(exc, httpx.TransportError):
+        return "outcome_delivery_transport"
+    return "outcome_delivery_gateway_client_status"
+
+
+def _request_correlation(params: Any) -> str:
+    """Correlate failures without logging host content or raw identifiers."""
+    if not isinstance(params, Mapping):
+        return "unavailable"
+    fields = [params.get(key) for key in ("host", "session_id", "turn_id", "tool_call_id")]
+    if all(isinstance(value, str) and value for value in fields):
+        return sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()[:24]
+    # MCP bridge calls intentionally do not receive host-session-turn context.
+    # Their tool name and host-issued call ID are sufficient to correlate a
+    # failure without retaining arguments or exposing either identifier.
+    mcp_fields = [params.get(key) for key in ("tool_name", "tool_call_id")]
+    if all(isinstance(value, str) and value for value in mcp_fields):
+        return sha256(
+            json.dumps(["mcp", *mcp_fields], separators=(",", ":")).encode()
+        ).hexdigest()[:24]
+    return "unavailable"
 
 
 class HookControlRuntime:
@@ -112,8 +159,7 @@ class HookControlRuntime:
         socket_path: str,
         participant: Optional[ConnectedParticipant] = None,
         rpc_timeout_seconds: float = 8.0,
-        mcp_rpc_timeout_seconds: float = 305.0,
-        postflight_attempts: int = 3,
+        mcp_rpc_timeout_seconds: float = _MCP_RPC_TIMEOUT_SECONDS,
     ) -> None:
         if config.integration_type != "agent":
             raise ValueError("hook control requires a connected agent integration")
@@ -135,15 +181,22 @@ class HookControlRuntime:
         )
         self.rpc_timeout_seconds = max(0.1, float(rpc_timeout_seconds))
         self.mcp_rpc_timeout_seconds = max(0.1, float(mcp_rpc_timeout_seconds))
-        self.postflight_attempts = max(1, int(postflight_attempts))
         self._posture_cache = NativeHookPostureCache(config)
         self._last_posture_document: Optional[str] = None
         self._observe_offline_permits = 0
         self._offline_permits: set[str] = set()
+        self._event_health = HookEventHealth()
         self._server: Optional[asyncio.AbstractServer] = None
-        self._pending: Dict[str, _PendingAction] = {}
+        self._socket_lock_fd: Optional[int] = None
+        self._socket_identity: Optional[tuple[int, int]] = None
         self._reserving: set[str] = set()
-        self._pending_lock = asyncio.Lock()
+        self._reservation_lock = asyncio.Lock()
+        self._outbox = HookOutcomeOutbox(
+            self.socket_path.with_name(f"{self.socket_path.name}.outcomes.json")
+        )
+        self._outbox_task: Optional[asyncio.Task[None]] = None
+        self._outbox_wakeup = asyncio.Event()
+        self._outbox_delivery_failures: dict[str, str] = {}
         self._stop_event = asyncio.Event()
 
     @property
@@ -151,8 +204,23 @@ class HookControlRuntime:
         return self._server is not None
 
     @staticmethod
-    def _pending_key(*, host: str, session_id: str, turn_id: str, tool_call_id: str) -> str:
-        return ":".join((host, session_id, turn_id, tool_call_id))
+    def _action_key(*, host: str, session_id: str, turn_id: str, tool_call_id: str) -> str:
+        """Build the host-provided correlation key for one governed tool call.
+
+        Codex's documented post-tool event is correlated by its tool-use ID.
+        A turn ID can be absent from that event even when it was supplied to
+        preflight, so including it would turn a valid result observation into
+        an unknown postflight.  The session-scoped tool-use ID is the complete
+        correlation material for Codex.  Other hosts retain their full
+        host-session-turn-tool binding.
+        """
+
+        fields = (
+            (host, session_id, tool_call_id)
+            if host == "codex"
+            else (host, session_id, turn_id, tool_call_id)
+        )
+        return ":".join(fields)
 
     def _ensure_socket_parent(self) -> None:
         parent = self.socket_path.parent
@@ -164,22 +232,97 @@ class HookControlRuntime:
             socket_stat = self.socket_path.lstat()
             if socket_stat.st_uid != os.getuid() or not stat.S_ISSOCK(socket_stat.st_mode):
                 raise HookControlError("socket_path_unsafe")
+
+    @property
+    def _socket_lock_path(self) -> Path:
+        return self.socket_path.with_name(f"{self.socket_path.name}.lock")
+
+    def _acquire_socket_lock(self) -> None:
+        """Claim exclusive ownership before removing a stale socket pathname."""
+
+        flags = os.O_RDWR | os.O_CREAT
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            fd = os.open(self._socket_lock_path, flags, 0o600)
+        except OSError as exc:
+            if exc.errno in {errno.ELOOP, errno.EACCES, errno.EPERM}:
+                raise HookControlError("socket_path_unsafe") from exc
+            raise
+        try:
+            lock_stat = os.fstat(fd)
+            if lock_stat.st_uid != os.getuid() or not stat.S_ISREG(lock_stat.st_mode):
+                raise HookControlError("socket_path_unsafe")
+            os.chmod(self._socket_lock_path, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            os.close(fd)
+            if exc.errno in {errno.EACCES, errno.EAGAIN}:
+                raise HookControlError("control_runtime_already_running") from exc
+            raise
+        except Exception:
+            os.close(fd)
+            raise
+        self._socket_lock_fd = fd
+
+    def _release_socket_lock(self) -> None:
+        fd, self._socket_lock_fd = self._socket_lock_fd, None
+        if fd is None:
+            return
+        with suppress(OSError):
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        with suppress(OSError):
+            os.close(fd)
+
+    def _remove_stale_socket(self) -> None:
+        if self.socket_path.exists() or self.socket_path.is_symlink():
+            socket_stat = self.socket_path.lstat()
+            if socket_stat.st_uid != os.getuid() or not stat.S_ISSOCK(socket_stat.st_mode):
+                raise HookControlError("socket_path_unsafe")
             self.socket_path.unlink()
+
+    def _owns_socket_path(self) -> bool:
+        if self._socket_identity is None:
+            return False
+        try:
+            socket_stat = self.socket_path.lstat()
+        except FileNotFoundError:
+            return False
+        return stat.S_ISSOCK(socket_stat.st_mode) and (
+            socket_stat.st_dev,
+            socket_stat.st_ino,
+        ) == self._socket_identity
 
     async def start(self) -> None:
         if self._server is not None:
             return
         self._ensure_socket_parent()
-        await self.participant.start()
+        self._acquire_socket_lock()
         try:
+            self._remove_stale_socket()
+            await self._outbox.load()
+            await self.participant.start()
             self._server = await asyncio.start_unix_server(
                 self._handle_connection,
                 path=str(self.socket_path),
             )
             os.chmod(self.socket_path, 0o600)
+            socket_stat = self.socket_path.lstat()
+            if socket_stat.st_uid != os.getuid() or not stat.S_ISSOCK(socket_stat.st_mode):
+                raise HookControlError("socket_path_unsafe")
+            self._socket_identity = (socket_stat.st_dev, socket_stat.st_ino)
             self._stop_event.clear()
+            self._outbox_task = asyncio.create_task(
+                self._run_outbox_delivery(), name="hook-outcome-delivery"
+            )
         except Exception:
+            server, self._server = self._server, None
+            if server is not None:
+                server.close()
+                await server.wait_closed()
+            self._socket_identity = None
             await self.participant.stop()
+            self._release_socket_lock()
             raise
 
     async def run_forever(self) -> None:
@@ -192,11 +335,19 @@ class HookControlRuntime:
         if server is not None:
             server.close()
             await server.wait_closed()
+        outbox_task, self._outbox_task = self._outbox_task, None
+        if outbox_task is not None:
+            outbox_task.cancel()
+            await asyncio.gather(outbox_task, return_exceptions=True)
         try:
-            if self.socket_path.exists() and stat.S_ISSOCK(self.socket_path.lstat().st_mode):
+            if self._owns_socket_path():
                 self.socket_path.unlink()
         finally:
-            await self.participant.stop()
+            self._socket_identity = None
+            try:
+                await self.participant.stop()
+            finally:
+                self._release_socket_lock()
 
     async def _handle_connection(
         self,
@@ -217,6 +368,10 @@ class HookControlRuntime:
 
     async def _response_for(self, line: bytes) -> Dict[str, Any]:
         request_id: Any = None
+        method = "invalid_request"
+        params: Any = None
+        outcome = "failed"
+        started_at = monotonic()
         try:
             if not line or len(line) > _MAX_REQUEST_BYTES:
                 raise HookControlError("invalid_request")
@@ -242,22 +397,59 @@ class HookControlRuntime:
                 self._dispatch(method, params),
                 timeout=timeout_seconds,
             )
+            outcome = "completed"
             return {"id": request_id, "ok": True, "result": result}
         except asyncio.TimeoutError:
+            outcome = "timed_out"
+            _LOGGER.warning(
+                "hook_control_request_failed method=%s code=control_timeout correlation=%s elapsed_ms=%s",
+                method, _request_correlation(params), round((monotonic() - started_at) * 1000),
+            )
             return {"id": request_id, "ok": False, "error": {"code": "control_timeout"}}
         except Exception as exc:
-            return {"id": request_id, "ok": False, "error": {"code": _safe_error_code(exc)}}
+            code = _safe_error_code(exc)
+            is_policy_denial = isinstance(exc, (PolicyViolationError, ActionDenied))
+            (_LOGGER.info if is_policy_denial else _LOGGER.warning)(
+                "hook_control_request_%s method=%s code=%s correlation=%s elapsed_ms=%s",
+                "denied" if is_policy_denial else "failed",
+                method, code, _request_correlation(params), round((monotonic() - started_at) * 1000),
+            )
+            return {"id": request_id, "ok": False, "error": {"code": code}}
+        finally:
+            self._record_event_health(
+                method=method,
+                params=params,
+                outcome=outcome,
+                elapsed_ms=round((monotonic() - started_at) * 1_000),
+            )
+
+    def _record_event_health(
+        self, *, method: str, params: Any, outcome: str, elapsed_ms: int
+    ) -> None:
+        """Publish only bounded event-health facts; never hook content."""
+
+        self._event_health.record(
+            method=method,
+            params=params,
+            outcome=outcome,
+            elapsed_ms=elapsed_ms,
+        )
+        report = getattr(self.participant, "set_native_hook_event_receipts", None)
+        if not callable(report):
+            return
+        try:
+            report(event_receipts=self._event_health.snapshot())
+        except ValueError:
+            _LOGGER.warning("native_hook_event_health_rejected")
 
     async def _dispatch(self, method: str, raw_params: Any) -> Dict[str, Any]:
         if method == "health":
             if raw_params not in ({}, None):
                 raise HookControlError("invalid_health_params")
-            async with self._pending_lock:
-                unresolved = len(self._pending)
             return {
                 "protocol_version": HOOK_CONTROL_PROTOCOL,
                 "capabilities": [_HOST_CAPABILITY],
-                "unresolved_postflights": unresolved,
+                "undelivered_outcomes": self._outbox.undelivered_outcome_count,
                 "native_hook_posture": self._posture_cache.diagnostics(),
                 "observe_offline_permits": self._observe_offline_permits,
             }
@@ -320,12 +512,28 @@ class HookControlRuntime:
         )
         if tool is None:
             raise HookControlError("mcp_tool_not_assigned")
-        response = await self.governance.mcp_communicate_async(
-            target_binding=tool.target_binding,
-            tool_name=tool.target_tool_name,
-            arguments=dict(arguments),
-            tool_call_id=tool_call_id,
-        )
+        try:
+            response = await self.governance.mcp_communicate_async(
+                target_binding=tool.target_binding,
+                tool_name=tool.target_tool_name,
+                arguments=dict(arguments),
+                tool_call_id=tool_call_id,
+            )
+        except PolicyViolationError as exc:
+            # The Gateway is authoritative for signed policy outcomes. Both
+            # admission denials and withheld provider responses are valid MCP
+            # tool results, not bridge or transport failures. Keep messages
+            # stable and do not reflect detector or policy detail.
+            details = exc.details if isinstance(exc.details, Mapping) else {}
+            message = (
+                "Atellagent withheld this tool response under the configured policy."
+                if details.get("response_delivery_status") == "withheld"
+                else "Atellagent blocked this tool call under the configured policy."
+            )
+            return {
+                "content": [{"type": "text", "text": message}],
+                "is_error": True,
+            }
         result = _mcp_tool_result(response)
         return {
             "content": result["content"],
@@ -415,11 +623,11 @@ class HookControlRuntime:
         if not isinstance(postflight_required, bool):
             raise HookControlError("invalid_postflight_required")
         adapter_version = _identifier(params.get("adapter_version"), "adapter_version")
-        pending_key = self._pending_key(**fields)
-        async with self._pending_lock:
-            if pending_key in self._pending or pending_key in self._reserving:
+        action_key = self._action_key(**fields)
+        async with self._reservation_lock:
+            if action_key in self._reserving:
                 raise HookControlError("duplicate_tool_call")
-            self._reserving.add(pending_key)
+            self._reserving.add(action_key)
         context = GovernanceCallContext(
             tool_name=tool_name,
             arguments=dict(arguments),
@@ -427,7 +635,7 @@ class HookControlRuntime:
             runtime_mode="hook",
             capabilities=[_HOST_CAPABILITY],
             tool_call_id=fields["tool_call_id"],
-            action_key=pending_key,
+            action_key=action_key,
             request_payload={
                 "host": fields["host"],
                 "session_id": fields["session_id"],
@@ -437,83 +645,101 @@ class HookControlRuntime:
         )
         try:
             await self._refresh_native_hook_posture()
-            receipt = await self.governance.preflight_async(context)
+            receipt = await asyncio.wait_for(
+                self.governance.preflight_async(context),
+                timeout=min(self.rpc_timeout_seconds, _PREFLIGHT_TIMEOUT_SECONDS),
+            )
             if not receipt.is_executable:
                 raise HookControlError("policy_denied")
+            if (
+                receipt.action_key != action_key
+                or not receipt.action_binding_fingerprint
+            ):
+                raise HookControlError("decision_binding_invalid")
+            if postflight_required:
+                try:
+                    await self._outbox.reserve(
+                        action_key, receipt.action_binding_fingerprint
+                    )
+                except ValueError as exc:
+                    if "already exists" in str(exc):
+                        raise HookControlError("duplicate_tool_call") from exc
+                    raise HookControlError("outcome_delivery_unavailable") from exc
             if receipt.obligations:
-                failed = _PendingAction(
-                    context=context,
-                    receipt=receipt,
+                if not postflight_required:
+                    try:
+                        await self._outbox.reserve(
+                            action_key, receipt.action_binding_fingerprint
+                        )
+                    except ValueError as exc:
+                        raise HookControlError("outcome_delivery_unavailable") from exc
+                await self._record_local_outcome(
+                    action_key,
                     success=False,
-                    error_message="local hook protocol cannot fulfill the required obligation",
+                    outcome_observation="local_protocol_rejected",
                     error_type="UnsupportedObligation",
                 )
-                async with self._pending_lock:
-                    self._reserving.discard(pending_key)
-                    self._pending[pending_key] = failed
-                await self._deliver_postflight(pending_key, failed)
                 raise HookControlError("unsupported_obligation")
             try:
-                await self.governance.action_gate.enforce(
-                    action=context.tool_name,
-                    integration_type="agent",
-                    correlation_id=receipt.action_key,
-                    encoded_directive=receipt.control_directive,
-                    facts=context.arguments,
-                    workflow_context=receipt.workflow_context,
-                    policy_decision_id=receipt.decision_id,
+                await asyncio.wait_for(
+                    self.governance.action_gate.enforce(
+                        action=context.tool_name,
+                        integration_type="agent",
+                        correlation_id=receipt.action_key,
+                        encoded_directive=receipt.control_directive,
+                        facts=context.arguments,
+                        workflow_context=receipt.workflow_context,
+                        policy_decision_id=receipt.decision_id,
+                    ),
+                    timeout=min(
+                        self.rpc_timeout_seconds,
+                        _DIRECTIVE_VERIFICATION_TIMEOUT_SECONDS,
+                    ),
                 )
-            except Exception:
-                failed = _PendingAction(
-                    context=context,
-                    receipt=receipt,
+            except Exception as exc:
+                if not postflight_required:
+                    try:
+                        await self._outbox.reserve(
+                            action_key, receipt.action_binding_fingerprint
+                        )
+                    except ValueError as reserve_error:
+                        raise HookControlError("outcome_delivery_unavailable") from reserve_error
+                await self._record_local_outcome(
+                    action_key,
                     success=False,
-                    error_message="local directive verification failed",
+                    outcome_observation="local_directive_verification_failed",
                     error_type="ActionDenied",
                 )
-                async with self._pending_lock:
-                    self._reserving.discard(pending_key)
-                    self._pending[pending_key] = failed
-                await self._deliver_postflight(pending_key, failed)
-                raise
-            async with self._pending_lock:
-                self._reserving.discard(pending_key)
-                if postflight_required:
-                    self._pending[pending_key] = _PendingAction(context=context, receipt=receipt)
+                if isinstance(exc, asyncio.TimeoutError):
+                    raise HookControlError("control_directive_timeout") from exc
+                raise HookControlError("control_directive_rejected") from exc
         except PolicyViolationError as exc:
-            async with self._pending_lock:
-                self._reserving.discard(pending_key)
             return {
                 "allowed": False,
                 "reason_code": str(exc.violation_type or "policy_denied"),
             }
         except httpx.TransportError:
-            async with self._pending_lock:
-                self._reserving.discard(pending_key)
-                if self._posture_cache.posture and self._posture_cache.posture.permits_observe_outage(
-                    host=fields["host"], adapter_version=adapter_version
-                ):
-                    self._offline_permits.add(pending_key)
-                    self._observe_offline_permits += 1
-                    report_health = getattr(
-                        self.participant,
-                        "set_native_hook_coverage_health",
-                        None,
-                    )
-                    if callable(report_health):
-                        report_health(
-                            observe_offline_permits=self._observe_offline_permits
-                        )
-                    return {
-                        "allowed": True,
-                        "action_key": pending_key,
-                        "disposition": "observe_offline_permit",
-                    }
+            if self._posture_cache.posture and self._posture_cache.posture.permits_observe_outage(
+                host=fields["host"], adapter_version=adapter_version
+            ):
+                self._offline_permits.add(action_key)
+                self._observe_offline_permits += 1
+                report_health = getattr(
+                    self.participant,
+                    "set_native_hook_coverage_health",
+                    None,
+                )
+                if callable(report_health):
+                    report_health(observe_offline_permits=self._observe_offline_permits)
+                return {
+                    "allowed": True,
+                    "action_key": action_key,
+                    "disposition": "observe_offline_permit",
+                }
             raise
-        except Exception:
-            async with self._pending_lock:
-                self._reserving.discard(pending_key)
-            raise
+        finally:
+            async with self._reservation_lock:
+                self._reserving.discard(action_key)
         return {
             "allowed": True,
             "action_key": receipt.action_key,
@@ -537,60 +763,122 @@ class HookControlRuntime:
         outcome_observation = str(params.get("outcome_observation") or "").strip()
         if success_value is None and outcome_observation != "result_observed":
             raise HookControlError("invalid_outcome_observation")
-        pending_key = self._pending_key(**fields)
-        async with self._pending_lock:
-            pending = self._pending.get(pending_key)
-            if pending is None:
-                if pending_key in self._offline_permits:
-                    self._offline_permits.discard(pending_key)
-                    return {"recorded": False, "reason_code": "observe_offline_permit"}
-                raise HookControlError("unknown_tool_call")
-            success = success_value
-            if pending.postflight_received and pending.success != success:
-                raise HookControlError("postflight_conflict")
-            if not pending.postflight_received:
-                pending = _PendingAction(
-                    context=pending.context,
-                    receipt=pending.receipt,
-                    success=success,
-                    result_payload=params.get("result_payload") if success is not False else None,
-                    error_message=str(params.get("error_message") or "").strip() or None,
-                    error_type=str(params.get("error_type") or "").strip() or None,
-                    evidence=(
-                        {"outcome_observation": outcome_observation}
-                        if outcome_observation
-                        else None
-                    ),
-                    postflight_received=True,
-                )
-                self._pending[pending_key] = pending
-        recorded = await self._deliver_postflight(pending_key, pending)
-        if recorded:
-            return {"recorded": True, "action_key": pending.receipt.action_key}
-        return {"recorded": False, "reason_code": "postflight_unresolved"}
-
-    async def _deliver_postflight(self, pending_key: str, pending: _PendingAction) -> bool:
-        """Deliver one stored outcome with bounded retries and no local fallback."""
-        for attempt in range(self.postflight_attempts):
+        if not outcome_observation:
+            outcome_observation = (
+                "result_observed" if success_value is True else "execution_failed"
+            )
+        action_key = self._action_key(**fields)
+        if action_key in self._offline_permits:
+            self._offline_permits.discard(action_key)
+            return {"recorded": False, "reason_code": "observe_offline_permit"}
+        error_type = str(params.get("error_type") or "").strip() or None
+        if error_type is not None:
+            error_type = _identifier(error_type, "error_type")
+        result_payload = params.get("result_payload") if success_value is not False else None
+        result_byte_length: Optional[int] = None
+        result_sha256: Optional[str] = None
+        if result_payload is not None:
             try:
-                await self.governance.postflight_async(
-                    pending.context,
-                    receipt=pending.receipt,
-                    result_payload=pending.result_payload,
-                    success=pending.success,
-                    error_message=pending.error_message,
-                    error_type=pending.error_type,
-                    evidence=pending.evidence,
-                )
-            except Exception:
-                if attempt + 1 < self.postflight_attempts:
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                serialized = json.dumps(
+                    result_payload, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+            except (TypeError, ValueError):
+                serialized = None
+            if serialized is not None:
+                result_byte_length = len(serialized)
+                result_sha256 = sha256(serialized).hexdigest()
+        try:
+            await self._record_local_outcome(
+                action_key,
+                success=success_value,
+                outcome_observation=outcome_observation,
+                error_type=error_type,
+                result_byte_length=result_byte_length,
+                result_sha256=result_sha256,
+            )
+        except HookOutcomeCorrelationUnavailable as exc:
+            raise HookControlError("unknown_tool_call") from exc
+        except (ValueError, OSError) as exc:
+            raise HookControlError("outcome_delivery_unavailable") from exc
+        return {"recorded": True, "action_key": action_key, "delivery_status": "queued"}
+
+    async def _record_local_outcome(
+        self,
+        action_key: str,
+        *,
+        success: Optional[bool],
+        outcome_observation: str,
+        error_type: Optional[str] = None,
+        result_byte_length: Optional[int] = None,
+        result_sha256: Optional[str] = None,
+    ) -> None:
+        await self._outbox.record_outcome(
+            action_key,
+            {
+                "outcome_observation": outcome_observation,
+                "success": success,
+                "result_byte_length": result_byte_length,
+                "result_sha256": result_sha256,
+                "error_type": error_type,
+            },
+        )
+        self._outbox_wakeup.set()
+
+    async def _run_outbox_delivery(self) -> None:
+        """Retry only outcomes already received from the host hook."""
+
+        while not self._stop_event.is_set():
+            self._outbox_wakeup.clear()
+            await self._outbox.prune()
+            for action_key, entry in await self._outbox.received_entries():
+                try:
+                    outcome = entry.get("outcome")
+                    fingerprint = entry.get("binding_fingerprint")
+                    if not isinstance(outcome, dict) or not isinstance(fingerprint, str):
+                        raise ValueError("hook outcome outbox is invalid")
+                    await asyncio.wait_for(
+                        self.governance.native_hook_outcome_async(
+                            action_key=action_key,
+                            action_binding_fingerprint=fingerprint,
+                            outcome_observation=str(outcome["outcome_observation"]),
+                            success=outcome.get("success"),
+                            result_byte_length=outcome.get("result_byte_length"),
+                            result_sha256=outcome.get("result_sha256"),
+                            error_type=outcome.get("error_type"),
+                        ),
+                        timeout=min(self.rpc_timeout_seconds, 1.5),
+                    )
+                except Exception as exc:
+                    failure_code = _safe_outcome_delivery_error_code(exc)
+                    if isinstance(exc, PolicyViolationError):
+                        # A native outcome is bound to an already-released
+                        # action. A Gateway policy rejection therefore means
+                        # this stored delivery can never become admissible
+                        # (for example, its bounded correlation expired or
+                        # belongs to a retired execution boundary). Retrying
+                        # it forever cannot repair the canonical ledger.
+                        _LOGGER.warning(
+                            "native_hook_outcome_delivery_discarded code=%s correlation=%s",
+                            failure_code,
+                            sha256(action_key.encode()).hexdigest()[:24],
+                        )
+                        await self._outbox.acknowledge(action_key)
+                        self._outbox_delivery_failures.pop(action_key, None)
+                        continue
+                    if self._outbox_delivery_failures.get(action_key) != failure_code:
+                        _LOGGER.warning(
+                            "native_hook_outcome_delivery_failed code=%s correlation=%s",
+                            failure_code,
+                            sha256(action_key.encode()).hexdigest()[:24],
+                        )
+                    self._outbox_delivery_failures[action_key] = failure_code
                     continue
-                return False
-            async with self._pending_lock:
-                self._pending.pop(pending_key, None)
-            return True
-        return False  # pragma: no cover - non-empty attempt invariant
+                await self._outbox.acknowledge(action_key)
+                self._outbox_delivery_failures.pop(action_key, None)
+            with suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    self._outbox_wakeup.wait(), timeout=_OUTBOX_RETRY_INTERVAL_SECONDS
+                )
 
     async def _refresh_native_hook_posture(self) -> None:
         document = getattr(self.participant, "native_hook_posture", None)

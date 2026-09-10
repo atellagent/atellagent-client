@@ -8,7 +8,7 @@ template in [the host setup guide](../HOST_HOOKS.md).
 | --- | --- | --- |
 | `UserPromptSubmit` | `turn_entry` only | A denial blocks the submitted prompt before Codex processes it. |
 | Pre-tool `PreToolUse` | Documented command-hook tool calls | A structured deny prevents the tool invocation. |
-| `PostToolUse` | Correlated tool results | Outcome recording; Codex provides no separate post-tool failure event. |
+| `PostToolUse` | Correlated tool results | Outcome recording only; it cannot inspect, redact, deny, or gate delivery of the result. Codex provides no separate post-tool failure event. |
 | Subsequent model requests | Not observed | No `full_model_request` claim. |
 | Route mode | Not provided by this adapter | Use a provider session where you own transport. |
 | Subscription preservation | Yes | Decision mode leaves native Codex transport in place. |
@@ -25,6 +25,7 @@ stdio adapter over the same owner-private hook-control socket. The control
 runtime, not the bridge process, owns the enrolled identity and reviewed MCP
 tool map.
 
-Codex command hooks require an explicit `network.allow_unix_sockets` entry
-for that exact socket path. Apply the bundled TOML template and fully restart
-Codex after changing hooks, MCP servers, or socket permissions.
+The bundled TOML template allowlists the exact control-socket path in Codex's
+sandbox configuration. The hook commands invoke the adapter directly; they do
+not nest another `codex sandbox` process. Apply the bundled TOML template and
+fully restart Codex after changing hooks, MCP servers, or socket permissions.

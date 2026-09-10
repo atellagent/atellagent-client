@@ -14,6 +14,13 @@ Code or Codex command-hook JSON to that socket. Standard host hooks use
 `boundary_identity_only` and provide `turn_entry` model decisions plus tool
 preflight/postflight, not `full_model_request` observation.
 
+For hosts that emit a correlated post-tool event, the runtime durably retains
+only an opaque action correlation plus bounded result size/digest metadata
+until the Gateway acknowledges the outcome. It does not persist tool arguments,
+tool output, or policy directives locally. Hosts without a documented correlated
+post-tool event remain preflight-governed and are recorded by Gateway as an
+unobserved outcome when no callback can arrive.
+
 ```bash
 atellagent-cli ./hook-control.yaml \
   --hook-control-socket /run/user/<uid>/atellagent/control.sock

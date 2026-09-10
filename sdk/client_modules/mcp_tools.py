@@ -55,13 +55,12 @@ class MCPToolsClientMixin:
         poll_interval_seconds: float = 0.2,
     ) -> Dict[str, Any]:
         """Invoke a tool and return its native MCP ``tools/call`` result."""
-        client = self._ensure_authenticated_sync()
         headers = self._apply_workflow_headers(
-            self.auth_manager.get_auth_headers(),
+            {},
             workflow_context,
         )
         response = self.operations.mcp_communicate_sync(
-            client,
+            self._request_gateway_sync,
             headers,
             self._resolve_source_agent_id(source_agent),
             target_binding,
@@ -91,15 +90,14 @@ class MCPToolsClientMixin:
         poll_timeout_seconds: float = 300.0,
         poll_interval_seconds: float = 0.2,
     ) -> str:
-        client = self._ensure_authenticated_sync()
         headers = self._apply_workflow_headers(
-            self.auth_manager.get_auth_headers(),
+            {},
             workflow_context,
         )
         source_agent_id = self._resolve_source_agent_id(source_agent)
         tool_args = self._coerce_tool_arguments(arguments)
         response = self.operations.mcp_communicate_sync(
-            client,
+            self._request_gateway_sync,
             headers,
             source_agent_id,
             target_binding,
@@ -129,15 +127,14 @@ class MCPToolsClientMixin:
         poll_timeout_seconds: float = 300.0,
         poll_interval_seconds: float = 0.2,
     ) -> str:
-        session = await self._ensure_authenticated_async()
         headers = self._apply_workflow_headers(
-            self.auth_manager.get_auth_headers(),
+            {},
             workflow_context,
         )
         source_agent_id = self._resolve_source_agent_id(source_agent)
         tool_args = self._coerce_tool_arguments(arguments)
         response = await self.operations.mcp_communicate_async(
-            session,
+            self._request_gateway_async,
             headers,
             source_agent_id,
             target_binding,
@@ -168,13 +165,12 @@ class MCPToolsClientMixin:
         poll_interval_seconds: float = 0.2,
     ) -> Dict[str, Any]:
         """Invoke a tool and return its native MCP ``tools/call`` result."""
-        session = await self._ensure_authenticated_async()
         headers = self._apply_workflow_headers(
-            self.auth_manager.get_auth_headers(),
+            {},
             workflow_context,
         )
         response = await self.operations.mcp_communicate_async(
-            session,
+            self._request_gateway_async,
             headers,
             self._resolve_source_agent_id(source_agent),
             target_binding,

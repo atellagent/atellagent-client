@@ -24,8 +24,6 @@ class AgentEventsClientMixin:
     ) -> Dict[str, Any]:
         """Emit a canonical agent event to gateway ingest."""
         service_account_id = self._require_agent_event_service_account()
-        client = self._ensure_authenticated_sync()
-        headers = self.auth_manager.get_auth_headers()
         payload = self._build_agent_event_payload(
             service_account_id=service_account_id,
             method=method,
@@ -38,7 +36,9 @@ class AgentEventsClientMixin:
             error_message=error_message,
             request_id=request_id,
         )
-        return self.operations.emit_agent_event_sync(client, headers, payload)
+        return self.operations.emit_agent_event_sync(
+            self._request_gateway_sync, {}, payload
+        )
 
     async def emit_agent_event_async(
         self,
@@ -55,8 +55,6 @@ class AgentEventsClientMixin:
     ) -> Dict[str, Any]:
         """Emit a canonical agent event to gateway ingest."""
         service_account_id = self._require_agent_event_service_account()
-        session = await self._ensure_authenticated_async()
-        headers = self.auth_manager.get_auth_headers()
         payload = self._build_agent_event_payload(
             service_account_id=service_account_id,
             method=method,
@@ -69,7 +67,9 @@ class AgentEventsClientMixin:
             error_message=error_message,
             request_id=request_id,
         )
-        return await self.operations.emit_agent_event_async(session, headers, payload)
+        return await self.operations.emit_agent_event_async(
+            self._request_gateway_async, {}, payload
+        )
 
 
 __all__ = ["AgentEventsClientMixin"]

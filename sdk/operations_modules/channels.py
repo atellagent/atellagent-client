@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 import httpx
 
@@ -134,7 +134,7 @@ def channel_ingress_sync(
     *,
     base_url: str,
     api_version: str,
-    client: httpx.Client,
+    request: Callable[..., Any],
     headers: Dict[str, str],
     event: Dict[str, Any],
     target: Optional[Dict[str, Any]] = None,
@@ -159,7 +159,7 @@ def channel_ingress_sync(
         idempotency_key=idempotency_key,
     )
     start = time.perf_counter()
-    response = client.post(f"{base_url}{endpoint}", json=payload, headers=headers)
+    response = request("POST", f"{base_url}{endpoint}", json=payload, headers=headers)
     return _handle_channel_ingress_response(
         endpoint=endpoint,
         response=response,
@@ -173,7 +173,7 @@ async def channel_ingress_async(
     *,
     base_url: str,
     api_version: str,
-    session: httpx.AsyncClient,
+    request: Callable[..., Awaitable[Any]],
     headers: Dict[str, str],
     event: Dict[str, Any],
     target: Optional[Dict[str, Any]] = None,
@@ -198,7 +198,8 @@ async def channel_ingress_async(
         idempotency_key=idempotency_key,
     )
     start = time.perf_counter()
-    response = await session.post(
+    response = await request(
+        "POST",
         f"{base_url}{endpoint}",
         json=payload,
         headers=headers,

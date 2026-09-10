@@ -51,7 +51,7 @@ configured route. Keep the token file and the host configuration owner-only.
 
 The route response returns standard Anthropic text and `tool_use` blocks. A
 later Claude Code tool execution is governed only if it traverses its own
-documented PEP or hook boundary.
+documented MCP or hook boundary.
 
 ## Failures and diagnostics
 

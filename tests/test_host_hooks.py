@@ -101,25 +101,36 @@ class HostHookAdapterTests(unittest.IsolatedAsyncioTestCase):
             "model": "gpt-5",
             "permission_mode": "default",
             "session_id": "session-1",
-            "tool_input": "raw command",
-            "tool_name": "shell",
+            "tool_input": {"command": "raw command"},
+            "tool_name": "Bash",
             "tool_use_id": "tool-1",
             "transcript_path": None,
             "turn_id": "turn-1",
         }
+        allowed = await self._handle("codex", pre)
+        self.assertEqual(allowed.exit_code, 0)
+        self.assertEqual(allowed.stdout, "")
+
         self.result = {"allowed": False}
         denied = await self._handle("codex", pre)
         rendered = json.loads(denied.stdout)["hookSpecificOutput"]
         self.assertEqual(rendered["hookEventName"], "PreToolUse")
         self.assertEqual(rendered["permissionDecision"], "deny")
-        self.assertEqual(self.calls[-1][1]["arguments"], {"input": "raw command"})
+        self.assertEqual(self.calls[-1][1]["arguments"], {"command": "raw command"})
 
         _, preflight = self.calls[-1]
         self.assertTrue(preflight["postflight_required"])
         self.assertEqual(
             preflight["adapter_version"], host_hooks.HOST_HOOK_ADAPTER_VERSION
         )
-        post = {**pre, "hook_event_name": "PostToolUse", "tool_response": {"ok": True}}
+        # Codex correlates a post-tool result with its tool-use ID.  Its
+        # result event need not repeat the optional turn ID from preflight.
+        post = {
+            key: value
+            for key, value in pre.items()
+            if key != "turn_id"
+        }
+        post.update({"hook_event_name": "PostToolUse", "tool_response": {"ok": True}})
         self.result = {"recorded": True}
         response = await self._handle("codex", post)
         self.assertEqual(response.exit_code, 0)
@@ -129,17 +140,73 @@ class HostHookAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(postflight["outcome_observation"], "result_observed")
         self.assertEqual(postflight["result_payload"], {"ok": True})
 
+    async def test_codex_prompt_preserves_literal_user_content(self) -> None:
+        """The hook must not add or strip presentation wrappers before policy."""
+
+        prompts = (
+            "Please explain the current policy module.",
+            "## My request:\nPlease explain the current policy module.",
+            '{"prompt":"Please explain the current policy module."}',
+            "`Please explain the current policy module.`",
+        )
+        for index, prompt in enumerate(prompts):
+            self.calls.clear()
+            response = await self._handle(
+                "codex",
+                {
+                    "hook_event_name": "UserPromptSubmit",
+                    "prompt": prompt,
+                    "session_id": "session-1",
+                    "turn_id": f"turn-{index}",
+                },
+            )
+            self.assertEqual(response.exit_code, 0)
+            method, payload = self.calls[-1]
+            self.assertEqual(method, "model.decision")
+            self.assertEqual(payload["messages"], [{"role": "user", "content": prompt}])
+
+    async def test_large_posttool_result_is_recorded_as_bounded_evidence(self) -> None:
+        event = {
+            "hook_event_name": "PostToolUse",
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+            "tool_use_id": "tool-1",
+            "tool_name": "view_image",
+            "tool_input": {"path": "/workspace/image.png"},
+            "tool_response": {"image": "x" * (host_hooks._MAX_POSTFLIGHT_RESULT_BYTES + 1)},
+        }
+        self.result = {"recorded": True}
+        response = await self._handle("codex", event)
+        self.assertEqual(response.exit_code, 0)
+        _, postflight = self.calls[-1]
+        result = postflight["result_payload"]
+        self.assertTrue(result["result_truncated"])
+        self.assertGreater(result["result_byte_length"], host_hooks._MAX_POSTFLIGHT_RESULT_BYTES)
+        self.assertEqual(len(result["result_sha256"]), 64)
+
     async def test_timeout_daemon_failure_and_malformed_input_fail_closed(self) -> None:
         event = {"hook_event_name": "PreToolUse", "session_id": "s", "turn_id": "turn-1", "tool_use_id": "t", "tool_name": "Bash", "tool_input": {}}
         self.failure = asyncio.TimeoutError()
         response = await self._handle("codex", event)
         self.assertEqual(response.exit_code, 2)
         self.assertEqual(response.stdout, "")
-        self.assertIn("unavailable", response.stderr)
+        self.assertIn("timed out", response.stderr)
 
         self.failure = HookControlError("control_unavailable")
         response = await self._handle("codex", event)
         self.assertEqual(response.exit_code, 2)
+        self.failure = HookControlError("control_socket_access_denied")
+        response = await self._handle("codex", event)
+        self.assertEqual(response.exit_code, 2)
+        self.assertIn("socket access was denied", response.stderr)
+        self.failure = HookControlError("model_decision_gateway_transport")
+        response = await self._handle("codex", event)
+        self.assertEqual(response.exit_code, 2)
+        self.assertIn("could not be reached", response.stderr)
+        self.failure = HookControlError("control_directive_timeout")
+        response = await self._handle("codex", event)
+        self.assertEqual(response.exit_code, 2)
+        self.assertIn("authorization in time", response.stderr)
         response = await self._handle("codex", {"hook_event_name": "PreToolUse"})
         self.assertEqual(response.exit_code, 2)
         response = await host_hooks.handle_host_hook("codex", "relative.sock", event)

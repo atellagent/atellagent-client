@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock, patch
 import unittest
 from typing import Any, Mapping, Sequence
 
@@ -22,6 +23,8 @@ from atellagent_client.proxy import (
 from atellagent_client.proxy.agent import MCPAgentProxyError
 from atellagent_client.proxy.contracts import _ConfiguredMCPToolGateway
 from atellagent_client.proxy.bridge_config import load_local_mcp_bridge_config
+from atellagent_client.proxy.cli import _LocalMCPToolGateway, _run_local_mcp_bridge
+from atellagent_client.integrations.agents.hook_control_protocol import HookControlError
 from atellagent_client.sdk.client_modules.mcp_tools import _mcp_tool_result
 from atellagent_client.proxy.tool import LEGACY_MCP_PROTOCOL_VERSIONS, MCPToolProxyError
 
@@ -77,6 +80,38 @@ def json_body(request: httpx.Request) -> Mapping[str, Any]:
 
 
 class MCPAgentProxyTests(unittest.IsolatedAsyncioTestCase):
+    def test_local_bridge_uses_a_bounded_mcp_control_timeout(self) -> None:
+        with patch("atellagent_client.proxy.cli.HookControlClient") as control_client:
+            _LocalMCPToolGateway(control_socket="/private/tmp/test.sock")
+
+        control_client.assert_called_once_with(
+            "/private/tmp/test.sock", timeout_seconds=30.0
+        )
+
+    async def test_local_bridge_returns_bounded_error_for_local_control_failure(self) -> None:
+        with patch(
+            "atellagent_client.proxy.cli.load_local_mcp_bridge_config",
+            return_value=type("Config", (), {"control_socket": "/private/tmp/test.sock"})(),
+        ), patch(
+            "atellagent_client.proxy.cli.HookControlClient.call",
+            new=AsyncMock(side_effect=HookControlError("control_socket_access_denied")),
+        ), patch("sys.stdin", [
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {"protocolVersion": "2025-03-26"},
+                }
+            ) + "\n",
+            json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}) + "\n",
+        ]), patch("builtins.print") as printed:
+            await _run_local_mcp_bridge("bridge.yaml")
+
+        rendered = "\n".join(str(call.args[0]) for call in printed.call_args_list)
+        self.assertIn("Atellagent MCP local control is unavailable", rendered)
+        self.assertNotIn("control_socket_access_denied", rendered)
+
     def test_local_bridge_config_has_no_client_credential_path(self) -> None:
         import tempfile
         from pathlib import Path
@@ -143,6 +178,35 @@ class MCPAgentProxyTests(unittest.IsolatedAsyncioTestCase):
         action_key = client.kwargs["action_context"]["action_key"]
         self.assertTrue(action_key.startswith("mcp-bridge-"))
         self.assertNotEqual(action_key, "call-1")
+
+    async def test_tool_failure_does_not_reflect_transport_detail_to_mcp_peer(self) -> None:
+        gateway = _Gateway()
+        gateway.invoke_tool = AsyncMock(side_effect=RuntimeError("private transport detail"))
+        proxy = MCPAgentProxy(gateway=gateway)
+        initialized = await proxy.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"protocolVersion": "2025-03-26"},
+            }
+        )
+        response = await proxy.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "echo", "arguments": {}},
+            },
+            headers={"Mcp-Session-Id": initialized.session_id or ""},
+        )
+        document = response.document or {}
+        self.assertEqual(document["error"]["code"], -32000)
+        self.assertEqual(
+            document["error"]["message"],
+            "Atellagent MCP control could not complete the request",
+        )
+        self.assertNotIn("private transport detail", json.dumps(document))
 
     async def test_legacy_initialization_binds_one_session_and_calls_gateway(self) -> None:
         gateway = _Gateway()

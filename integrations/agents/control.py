@@ -5,9 +5,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
-import httpx
 
 from atellagent_client.sdk.config import (
     ServiceAccountConfig,
@@ -33,7 +32,7 @@ from atellagent_client.protocol.context import (
 from atellagent_client.sdk.client_modules.runtime_authority import (
     apply_runtime_authority_headers,
 )
-from atellagent_client.sdk.errors import AuthenticationError, PolicyViolationError
+from atellagent_client.sdk.errors import PolicyTransportError, PolicyViolationError
 from atellagent_client.sdk.operations import APIOperations
 from atellagent_client.governance import RuntimeActionGate
 from atellagent_client.sdk.operations_modules.common import extract_policy_detail
@@ -93,6 +92,10 @@ class ExternalAgentGovernance:
         return normalize_portable_workflow_context(merged) or {}
 
     def _raise_gateway_error(self, status_code: int, payload: Any) -> None:
+        if status_code >= 500:
+            error = PolicyTransportError("Remote control service is unavailable")
+            error.safe_code = "control_gateway_server_status"
+            raise error
         detail = extract_policy_detail(payload)
         if status_code == 403:
             message = (
@@ -119,23 +122,46 @@ class ExternalAgentGovernance:
     def _has_bound_principal_context(workflow_context: Optional[Dict[str, Any]]) -> bool:
         return has_bound_principal_identity(workflow_context)
 
-    def _sync_headers(self, workflow_context: Dict[str, Any]) -> tuple[httpx.Client, Dict[str, str]]:
-        client, headers = self.gateway_session.get_authenticated_request_context_sync()
-        if client is None or headers is None:
-            raise AuthenticationError("Failed to authenticate service account")
-        return client, apply_runtime_authority_headers(
-            apply_workflow_headers(headers, workflow_context=workflow_context)
+    def _request_gateway_sync(
+        self,
+        method: str,
+        url: str,
+        *,
+        workflow_context: Dict[str, Any],
+        request_headers: Optional[Mapping[str, str]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        headers = apply_runtime_authority_headers(
+            apply_workflow_headers({}, workflow_context=workflow_context)
+        )
+        headers.update(dict(request_headers or {}))
+        return self.gateway_session.request_authenticated_sync(
+            method,
+            url,
+            headers=headers,
+            **kwargs,
         )
 
-    async def _async_headers(
+    async def _request_gateway_async(
         self,
+        method: str,
+        url: str,
+        *,
         workflow_context: Dict[str, Any],
-    ) -> tuple[httpx.AsyncClient, Dict[str, str]]:
-        session, headers = await self.gateway_session.get_authenticated_request_context()
-        if session is None or headers is None:
-            raise AuthenticationError("Failed to authenticate service account")
-        return session, apply_runtime_authority_headers(
-            apply_workflow_headers(headers, workflow_context=workflow_context)
+        request_headers: Optional[Mapping[str, str]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Send one governed request with retry-safe runtime context headers."""
+
+        headers = apply_runtime_authority_headers(
+            apply_workflow_headers({}, workflow_context=workflow_context)
+        )
+        headers.update(dict(request_headers or {}))
+        return await self.gateway_session.request_authenticated(
+            method,
+            url,
+            headers=headers,
+            **kwargs,
         )
 
     async def mcp_communicate_async(
@@ -148,15 +174,20 @@ class ExternalAgentGovernance:
     ) -> Dict[str, Any]:
         """Invoke a governed MCP tool through this boundary's existing session."""
 
-        session, headers = await self._async_headers({})
         operations = APIOperations(
             self.config.gateway_url,
             api_version=self.config.api_version,
             contract_version=self.config.contract_version,
         )
         return await operations.mcp_communicate_async(
-            session,
-            headers,
+            lambda method, url, **kwargs: self._request_gateway_async(
+                method,
+                url,
+                workflow_context={},
+                request_headers=kwargs.pop("headers", None),
+                **kwargs,
+            ),
+            {},
             str(self.config.service_account_id),
             str(target_binding),
             str(tool_name),
@@ -168,10 +199,10 @@ class ExternalAgentGovernance:
     async def mcp_catalog_async(self) -> Dict[str, Any]:
         """Fetch this enrolled agent-control runtime's assigned MCP catalog."""
 
-        session, headers = await self._async_headers({})
-        response = await session.get(
+        response = await self._request_gateway_async(
+            "GET",
             f"{self.gateway_session.base_url}{build_versioned_route(self.config.api_version, '/agents/boundary/mcp-catalog')}",
-            headers=headers,
+            workflow_context={},
         )
         payload = response.json() if response.content else {}
         if response.status_code >= 400:
@@ -315,6 +346,28 @@ class ExternalAgentGovernance:
             error_type=error_type,
             evidence=evidence,
             resource=resource,
+        )
+
+    async def native_hook_outcome_async(
+        self,
+        *,
+        action_key: str,
+        action_binding_fingerprint: str,
+        outcome_observation: str,
+        success: Optional[bool],
+        result_byte_length: Optional[int] = None,
+        result_sha256: Optional[str] = None,
+        error_type: Optional[str] = None,
+    ) -> None:
+        return await actions.native_hook_outcome_async(
+            self,
+            action_key=action_key,
+            action_binding_fingerprint=action_binding_fingerprint,
+            outcome_observation=outcome_observation,
+            success=success,
+            result_byte_length=result_byte_length,
+            result_sha256=result_sha256,
+            error_type=error_type,
         )
 
     def execute_sync(

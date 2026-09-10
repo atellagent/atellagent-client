@@ -435,6 +435,9 @@ def receipt_from_preflight_response(
             response_payload.get("control_directive_expires_at")
             or response_payload.get("directive_expires_at")
         ),
+        action_binding_fingerprint=normalize_optional_text(
+            response_payload.get("action_binding_fingerprint")
+        ),
     )
 
 
