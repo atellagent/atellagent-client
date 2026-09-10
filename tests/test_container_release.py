@@ -37,7 +37,13 @@ class ContainerReleaseContractTests(unittest.TestCase):
         self.assertIn("COPY dist/atellagent_client-*.whl /tmp/", self.dockerfile)
         self.assertIn("COPY requirements/container-core-py311.lock", self.dockerfile)
         self.assertNotIn("COPY . ", self.dockerfile)
-        self.assertNotIn("apt-get", self.dockerfile)
+        self.assertIn("apt-get update", self.dockerfile)
+        self.assertIn(
+            "apt-get install --yes --no-install-recommends --only-upgrade",
+            self.dockerfile,
+        )
+        self.assertIn("libpcre2-8-0=10.42-1+deb12u1", self.dockerfile)
+        self.assertIn("rm -rf /var/lib/apt/lists/*", self.dockerfile)
         self.assertIn("--require-hashes", self.dockerfile)
         self.assertIn("--only-binary=:all:", self.dockerfile)
         self.assertIn("pip check", self.dockerfile)

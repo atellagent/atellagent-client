@@ -36,6 +36,14 @@ COPY dist/atellagent_client-*.whl /tmp/
 COPY requirements/container-core-py311.lock /tmp/container-core-py311.lock
 COPY LICENSE.md THIRD_PARTY_NOTICES.md /licenses/
 
+# The pinned upstream Python image currently contains libpcre2-8-0 10.42-1.
+# Apply Debian's exact, remediated security build while retaining the immutable
+# base digest. This intentionally fails closed if that fixed version disappears.
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends --only-upgrade \
+      libpcre2-8-0=10.42-1+deb12u1 \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN test -n "$CLIENT_VERSION" \
     && test -n "$VCS_REF" \
     && test -n "$BUILD_DATE" \
