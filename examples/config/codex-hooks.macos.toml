@@ -10,4 +10,4 @@ hooks = [{ type = "command", command = "atellagent-hook-adapter --host codex --s
 hooks = [{ type = "command", command = "atellagent-hook-adapter --host codex --socket /private/tmp/atellagent-codex-hook-control/control.sock", timeout = 8 }]
 
 [[hooks.PostToolUse]]
-hooks = [{ type = "command", command = "atellagent-hook-adapter --host codex --socket /private/tmp/atellagent-codex-hook-control/control.sock", timeout = 8 }]
+hooks = [{ type = "command", command = "atellagent-codex-posttool-adapter --socket /private/tmp/atellagent-codex-hook-control/control.sock", timeout = 8 }]
