@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 from pathlib import Path
 import re
@@ -27,6 +28,27 @@ class HookControlError(RuntimeError):
     def __init__(self, code: str) -> None:
         self.code = str(code or "control_unavailable")
         super().__init__(self.code)
+
+
+def _local_transport_error_code(exc: BaseException) -> str:
+    """Classify a local socket failure without exposing transport internals."""
+
+    if isinstance(exc, asyncio.TimeoutError):
+        return "control_socket_timeout"
+    if isinstance(exc, (FileNotFoundError, NotADirectoryError)):
+        return "control_socket_missing"
+    if isinstance(exc, PermissionError):
+        return "control_socket_access_denied"
+    if isinstance(exc, ConnectionRefusedError):
+        return "control_socket_refused"
+    if isinstance(exc, OSError):
+        if exc.errno in {errno.EACCES, errno.EPERM}:
+            return "control_socket_access_denied"
+        if exc.errno in {errno.ENOENT, errno.ENOTDIR}:
+            return "control_socket_missing"
+        if exc.errno == errno.ECONNREFUSED:
+            return "control_socket_refused"
+    return "control_socket_unavailable"
 
 
 def identifier(value: Any, field_name: str) -> str:
@@ -98,22 +120,22 @@ class HookControlClient:
             writer.close()
             await writer.wait_closed()
         except Exception as exc:
-            raise HookControlError("control_unavailable") from exc
+            raise HookControlError(_local_transport_error_code(exc)) from exc
         if not line or len(line) > MAX_RESPONSE_BYTES:
-            raise HookControlError("control_unavailable")
+            raise HookControlError("control_response_invalid")
         try:
             response = json.loads(line)
         except (TypeError, ValueError) as exc:
-            raise HookControlError("control_unavailable") from exc
+            raise HookControlError("control_response_invalid") from exc
         if not isinstance(response, Mapping) or response.get("id") != "hook-request":
-            raise HookControlError("control_unavailable")
+            raise HookControlError("control_response_invalid")
         if response.get("ok") is not True:
             error = response.get("error")
             code = error.get("code") if isinstance(error, Mapping) else None
             raise HookControlError(str(code or "control_unavailable"))
         result = response.get("result")
         if not isinstance(result, Mapping):
-            raise HookControlError("control_unavailable")
+            raise HookControlError("control_response_invalid")
         return dict(result)
 
 

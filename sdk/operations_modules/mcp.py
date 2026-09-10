@@ -9,9 +9,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, Dict, Optional
-
-import httpx
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from atellagent_client.protocol.api import build_versioned_route
 from atellagent_client.sdk.errors import PolicyViolationError
@@ -97,7 +95,7 @@ def mcp_communicate_sync(
     *,
     base_url: str,
     api_version: str,
-    client: httpx.Client,
+    request: Callable[..., Any],
     headers: Dict[str, str],
     source_agent: str,
     target_agent: str,
@@ -133,7 +131,7 @@ def mcp_communicate_sync(
     }
 
     start = time.perf_counter()
-    response = client.post(url, json=payload, headers=headers)
+    response = request("POST", url, json=payload, headers=headers)
     final_status = response.status_code
 
     def _emit_telemetry(
@@ -181,7 +179,7 @@ def mcp_communicate_sync(
                     "Timed out waiting for MCP communication result "
                     f"(communication_id={communication_id})"
                 )
-            poll_response = client.get(poll_url, headers=headers)
+            poll_response = request("GET", poll_url, headers=headers)
             final_status = poll_response.status_code
             if poll_response.status_code == 202:
                 time.sleep(interval_seconds)
@@ -251,7 +249,7 @@ async def mcp_communicate_async(
     *,
     base_url: str,
     api_version: str,
-    session: httpx.AsyncClient,
+    request: Callable[..., Awaitable[Any]],
     headers: Dict[str, str],
     source_agent: str,
     target_agent: str,
@@ -287,7 +285,7 @@ async def mcp_communicate_async(
     }
 
     start = time.perf_counter()
-    response = await session.post(url, json=payload, headers=headers)
+    response = await request("POST", url, json=payload, headers=headers)
     final_status = response.status_code
 
     def _emit_telemetry(
@@ -335,7 +333,7 @@ async def mcp_communicate_async(
                     "Timed out waiting for MCP communication result "
                     f"(communication_id={communication_id})"
                 )
-            poll_response = await session.get(poll_url, headers=headers)
+            poll_response = await request("GET", poll_url, headers=headers)
             final_status = poll_response.status_code
             if poll_response.status_code == 202:
                 await asyncio.sleep(interval_seconds)

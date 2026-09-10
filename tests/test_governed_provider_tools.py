@@ -42,7 +42,9 @@ class _GatewayClient:
     def __init__(self) -> None:
         self.payload = None
 
-    def post(self, _url, *, json, headers):
+    def request(self, method, _url, *, json, headers):
+        if method != "POST":
+            raise AssertionError("unexpected method")
         self.payload = {"json": json, "headers": headers}
         return _GatewayResponse()
 
@@ -162,7 +164,7 @@ class GovernedProviderToolTests(unittest.TestCase):
         mcp_communicate_sync(
             base_url="https://gateway.example.test",
             api_version="v1",
-            client=gateway,
+            request=gateway.request,
             headers={"Authorization": "Bearer test"},
             source_agent="source-agent",
             target_agent="mcp-service-account",

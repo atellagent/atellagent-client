@@ -23,12 +23,32 @@ from typing import Any, Mapping, Sequence
 from .hook_control import HookControlClient, HookControlError
 
 
-INTERNAL_DEADLINE_SECONDS = 7.0
+ADAPTER_DEADLINE_SECONDS = 7.0
 """Bounded local-control deadline; host templates use an 8 second timeout."""
 
 _DENIED_REASON = "Atellagent policy denied this request."
 _UNAVAILABLE_REASON = "Atellagent control is unavailable; request denied."
-_MAX_STDIN_BYTES = 64 * 1024
+_SAFE_LOCAL_FAILURE_REASONS = {
+    "control_socket_missing": "Atellagent local control socket is unavailable; request denied.",
+    "control_socket_access_denied": "Atellagent local control socket access was denied; request denied.",
+    "control_socket_refused": "Atellagent local control service is not accepting requests; request denied.",
+    "control_socket_timeout": "Atellagent local control service timed out; request denied.",
+    "control_timeout": "Atellagent control service timed out; request denied.",
+    "control_gateway_server_status": "Atellagent remote control service is unavailable; request denied.",
+    "model_decision_gateway_auth": "Atellagent control credentials were rejected; request denied.",
+    "model_decision_gateway_client_status": "Atellagent control rejected the decision request; request denied.",
+    "model_decision_gateway_response_invalid": "Atellagent control returned an invalid decision response; request denied.",
+    "model_decision_gateway_server_status": "Atellagent control service failed while deciding the request; request denied.",
+    "model_decision_gateway_status": "Atellagent control could not complete the decision request; request denied.",
+    "model_decision_gateway_transport": "Atellagent control service could not be reached; request denied.",
+    "model_decision_transport_failure": "Atellagent control could not obtain a decision; request denied.",
+    "control_directive_timeout": "Atellagent could not verify the action authorization in time; request denied.",
+    "control_directive_rejected": "Atellagent could not verify the action authorization; request denied.",
+    "control_response_invalid": "Atellagent local control response was invalid; request denied.",
+    "control_runtime_already_running": "Atellagent local control runtime is already active; request denied.",
+}
+_MAX_STDIN_BYTES = 2 * 1024 * 1024
+_MAX_POSTFLIGHT_RESULT_BYTES = 16 * 1024
 _HOST_NAMES = {"claude-code", "codex", "gemini-cli"}
 _ATELLAGENT_MCP_PREFIX = "mcp__atellagent__"
 HOST_HOOK_ADAPTER_VERSION = "atellagent.host-hooks.v1"
@@ -47,7 +67,7 @@ def host_hook_capabilities() -> dict[str, Any]:
     """Return the public machine-readable coverage declaration."""
     return {
         "schema_version": "atellagent.host-hooks.v1",
-        "internal_deadline_seconds": INTERNAL_DEADLINE_SECONDS,
+        "adapter_deadline_seconds": ADAPTER_DEADLINE_SECONDS,
         "hosts": {
             "claude-code": {
                 "transport": "command",
@@ -57,7 +77,7 @@ def host_hook_capabilities() -> dict[str, Any]:
                     "PostToolUse": "postflight_success",
                     "PostToolUseFailure": "postflight_failure",
                 },
-                "exclusions": ["mcp__atellagent__* (effect-boundary MCP PEP)"],
+                "exclusions": ["mcp__atellagent__* (governed MCP boundary)"],
             },
             "codex": {
                 "transport": "command",
@@ -67,7 +87,7 @@ def host_hook_capabilities() -> dict[str, Any]:
                     "PostToolUse": "postflight_result",
                 },
                 "exclusions": [
-                    "mcp__atellagent__* (effect-boundary MCP PEP)",
+                    "mcp__atellagent__* (governed MCP boundary)",
                     "hosted or specialized tool paths outside documented command hooks",
                 ],
             },
@@ -86,8 +106,17 @@ def host_hook_capabilities() -> dict[str, Any]:
     }
 
 
-def _failure() -> HookAdapterResponse:
-    return HookAdapterResponse(exit_code=2, stderr=_UNAVAILABLE_REASON)
+def _failure(exc: Exception | None = None) -> HookAdapterResponse:
+    if isinstance(exc, asyncio.TimeoutError):
+        return HookAdapterResponse(
+            exit_code=2,
+            stderr=_SAFE_LOCAL_FAILURE_REASONS["control_timeout"],
+        )
+    code = exc.code if isinstance(exc, HookControlError) else None
+    return HookAdapterResponse(
+        exit_code=2,
+        stderr=_SAFE_LOCAL_FAILURE_REASONS.get(code, _UNAVAILABLE_REASON),
+    )
 
 
 def _string(event: Mapping[str, Any], field: str) -> str:
@@ -126,9 +155,9 @@ def _is_atellagent_mcp_facade(tool_name: str) -> bool:
 
 
 async def _call(socket_path: str, method: str, params: Mapping[str, Any]) -> dict[str, Any]:
-    client = HookControlClient(socket_path, timeout_seconds=INTERNAL_DEADLINE_SECONDS)
+    client = HookControlClient(socket_path, timeout_seconds=ADAPTER_DEADLINE_SECONDS)
     return await asyncio.wait_for(
-        client.call(method, params), timeout=INTERNAL_DEADLINE_SECONDS
+        client.call(method, params), timeout=ADAPTER_DEADLINE_SECONDS
     )
 
 
@@ -141,6 +170,27 @@ def _allowed(result: Mapping[str, Any]) -> bool:
 
 def _json(value: Mapping[str, Any]) -> str:
     return json.dumps(value, separators=(",", ":"), sort_keys=True)
+
+
+def _bounded_postflight_result(value: Any) -> Any:
+    """Keep large host results out of the local control protocol and evidence."""
+
+    try:
+        encoded = json.dumps(
+            value,
+            separators=(",", ":"),
+            sort_keys=True,
+            ensure_ascii=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        return {"result_unavailable": True}
+    if len(encoded) <= _MAX_POSTFLIGHT_RESULT_BYTES:
+        return value
+    return {
+        "result_truncated": True,
+        "result_byte_length": len(encoded),
+        "result_sha256": sha256(encoded).hexdigest(),
+    }
 
 
 def _prompt_result(host: str, allowed: bool) -> HookAdapterResponse:
@@ -160,12 +210,16 @@ def _pretool_result(host: str, allowed: bool) -> HookAdapterResponse:
             exit_code=0,
             stdout=_json({"decision": "deny", "reason": _DENIED_REASON}),
         )
+    if allowed:
+        # Codex treats an empty successful response as allow. Its command-hook
+        # protocol accepts an explicit PreToolUse permission decision only to
+        # deny, so serializing `permissionDecision: allow` fails the tool call.
+        return HookAdapterResponse(exit_code=0)
     output: dict[str, Any] = {
         "hookEventName": "PreToolUse",
-        "permissionDecision": "allow" if allowed else "deny",
+        "permissionDecision": "deny",
     }
-    if not allowed:
-        output["permissionDecisionReason"] = _DENIED_REASON
+    output["permissionDecisionReason"] = _DENIED_REASON
     return HookAdapterResponse(
         exit_code=0,
         stdout=_json({"hookSpecificOutput": output}),
@@ -312,9 +366,9 @@ async def _handle_posttool(host: str, socket_path: str, event: Mapping[str, Any]
     if host == "codex":
         params["success"] = None
         params["outcome_observation"] = "result_observed"
-        params["result_payload"] = event.get("tool_response")
+        params["result_payload"] = _bounded_postflight_result(event.get("tool_response"))
     elif params["success"]:
-        params["result_payload"] = event.get("tool_response")
+        params["result_payload"] = _bounded_postflight_result(event.get("tool_response"))
     elif params["success"] is False:
         params["error_message"] = str(event.get("error") or "host tool failure")
         params["error_type"] = "HostToolFailure"
@@ -351,8 +405,8 @@ async def handle_host_hook(
                 return _failure()
             return await _handle_posttool(host, socket_path, event)
         return _failure()
-    except (asyncio.TimeoutError, HookControlError, ValueError, TypeError):
-        return _failure()
+    except (asyncio.TimeoutError, HookControlError, ValueError, TypeError) as exc:
+        return _failure(exc)
     except Exception:
         # A hook command must never surface internal errors or fail open.
         return _failure()
@@ -387,7 +441,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 __all__ = [
     "HookAdapterResponse",
-    "INTERNAL_DEADLINE_SECONDS",
+    "ADAPTER_DEADLINE_SECONDS",
     "handle_host_hook",
     "host_hook_capabilities",
     "main",

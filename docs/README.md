@@ -11,7 +11,7 @@ they do not broaden the coverage of a host or integration surface.
 | Run an outbound connected participant or private bridge | [Connected runtime](../connected/README.md) |
 | Govern Claude Code or Codex | [External coding hosts](HOST_HOOKS.md) |
 | Use OpenAI, Google, or Anthropic provider SDKs | [Provider sessions](../integrations/providers/README.md) |
-| Govern a customer-owned tool boundary | [Local governance](../governance/README.md) and [PEP](../pep/README.md) |
+| Govern a customer-owned tool boundary | [Local governance](../governance/README.md) and [tool boundaries](../pep/README.md) |
 | Use a compatibility MCP proxy | [MCP proxies](../proxy/README.md) |
 | Build an agent, model, tool, workflow, or channel adapter | [Integrations](../integrations/README.md) |
 | Run the portable client image | [Docker](../docker/README.md) |

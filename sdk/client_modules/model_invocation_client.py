@@ -18,11 +18,10 @@ class ModelInvocationClientMixin:
         **kwargs,
     ) -> Dict[str, Any]:
         """Send a provider-neutral model invocation request (sync)."""
-        client = self._ensure_authenticated_sync()
-        headers = self.auth_manager.get_auth_headers()
+        headers = {}
         headers = self._apply_workflow_headers(headers, workflow_context)
         return self.operations.invoke_model_sync(
-            client,
+            self._request_gateway_sync,
             headers,
             messages,
             stream,
@@ -39,11 +38,10 @@ class ModelInvocationClientMixin:
         **kwargs,
     ) -> Dict[str, Any]:
         """Send a provider-neutral model invocation request (async)."""
-        session = await self._ensure_authenticated_async()
-        headers = self.auth_manager.get_auth_headers()
+        headers = {}
         headers = self._apply_workflow_headers(headers, workflow_context)
         return await self.operations.invoke_model_async(
-            session,
+            self._request_gateway_async,
             headers,
             messages,
             stream,
@@ -66,10 +64,9 @@ class ModelInvocationClientMixin:
     ) -> Dict[str, Any]:
         """Send a channel ingress event to the gateway service-account surface."""
         self._require_channel_service_account(method_name="send_channel_ingress")
-        client = self._ensure_authenticated_sync()
-        headers = self.auth_manager.get_auth_headers()
+        headers = {}
         return self.operations.channel_ingress_sync(
-            client,
+            self._request_gateway_sync,
             headers,
             event=event,
             target=target,
@@ -97,10 +94,9 @@ class ModelInvocationClientMixin:
     ) -> Dict[str, Any]:
         """Send a channel ingress event to the gateway service-account surface (async)."""
         self._require_channel_service_account(method_name="send_channel_ingress_async")
-        session = await self._ensure_authenticated_async()
-        headers = self.auth_manager.get_auth_headers()
+        headers = {}
         return await self.operations.channel_ingress_async(
-            session,
+            self._request_gateway_async,
             headers,
             event=event,
             target=target,

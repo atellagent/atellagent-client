@@ -86,6 +86,14 @@ def _error(document: Mapping[str, Any], message: str, *, code: int = -32600) -> 
     return {"jsonrpc": "2.0", "id": _request_id(document), "error": {"code": code, "message": message}}
 
 
+def _safe_invocation_error(error: Exception) -> str:
+    """Return a public MCP error without reflecting local or transport detail."""
+
+    if isinstance(error, MCPAgentProxyError):
+        return str(error)
+    return "Atellagent MCP control could not complete the request"
+
+
 def _result(document: Mapping[str, Any], result: Mapping[str, Any]) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": _request_id(document), "result": dict(result)}
 
@@ -217,7 +225,12 @@ class MCPAgentProxy:
                     peer_call_id=_request_id(document),
                 )
             except Exception as error:
-                return ProxyResponse(protocol=protocol, document=_error(document, str(error), code=-32000))
+                return ProxyResponse(
+                    protocol=protocol,
+                    document=_error(
+                        document, _safe_invocation_error(error), code=-32000
+                    ),
+                )
             return ProxyResponse(
                 protocol=protocol,
                 session_id=session_id if protocol is MCPPeerProtocol.LEGACY_STREAMABLE_HTTP else None,

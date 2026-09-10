@@ -17,6 +17,7 @@ import yaml
 
 from atellagent_client.integrations.agents.hook_control_protocol import (
     HookControlClient,
+    HookControlError,
 )
 from atellagent_client.sdk.client_modules.client_class import AtellagentClient
 from atellagent_client.sdk.config import load_service_account_config_from_yaml
@@ -30,6 +31,9 @@ from .contracts import (
     _ConfiguredMCPToolGateway,
 )
 from .tool import MCPToolProxy, MCPToolTarget
+
+
+_MCP_RPC_TIMEOUT_SECONDS = 30.0
 
 
 def _object(value: Any, label: str) -> Mapping[str, Any]:
@@ -95,7 +99,13 @@ class _LocalMCPToolGateway:
     """Use the enrolled local control runtime without owning credentials."""
 
     def __init__(self, *, control_socket: str) -> None:
-        self._control = HookControlClient(control_socket, timeout_seconds=305.0)
+        # A conversational MCP client has no durable continuation for an
+        # indefinitely pending call. Bound the bridge to the same end-to-end
+        # control budget as the local runtime rather than polling for minutes.
+        self._control = HookControlClient(
+            control_socket,
+            timeout_seconds=_MCP_RPC_TIMEOUT_SECONDS,
+        )
 
     async def list_tools(self) -> tuple[MCPVisibleTool, ...]:
         result = await self._control.call("mcp.list", {})
@@ -155,7 +165,35 @@ async def _run_local_mcp_bridge(config_path: str) -> int:
         try:
             response = await proxy.handle_json_line(line)
         except MCPAgentProxyError as error:
-            response = json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": str(error)}})
+            response = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32600, "message": str(error)},
+                }
+            )
+        except HookControlError:
+            response = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": -32000,
+                        "message": "Atellagent MCP local control is unavailable",
+                    },
+                }
+            )
+        except Exception:
+            response = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": -32000,
+                        "message": "Atellagent MCP bridge could not complete the request",
+                    },
+                }
+            )
         if response is not None:
             print(response, flush=True)
     return 0

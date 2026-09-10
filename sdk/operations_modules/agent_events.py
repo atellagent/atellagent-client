@@ -5,9 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
-
-import httpx
+from typing import Any, Awaitable, Callable, Dict
 
 from atellagent_client.protocol.api import build_versioned_route
 
@@ -16,7 +14,7 @@ def emit_agent_event_sync(
     *,
     base_url: str,
     api_version: str,
-    client: httpx.Client,
+    request: Callable[..., Any],
     headers: Dict[str, str],
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -24,7 +22,7 @@ def emit_agent_event_sync(
     Emit a canonical agent runtime event to the gateway.
     """
     url = f"{base_url}{build_versioned_route(api_version, '/agent-events/ingest')}"
-    response = client.post(url, json=payload, headers=headers)
+    response = request("POST", url, json=payload, headers=headers)
     data: Dict[str, Any]
     try:
         data = response.json()
@@ -41,7 +39,7 @@ async def emit_agent_event_async(
     *,
     base_url: str,
     api_version: str,
-    session: httpx.AsyncClient,
+    request: Callable[..., Awaitable[Any]],
     headers: Dict[str, str],
     payload: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -49,7 +47,7 @@ async def emit_agent_event_async(
     Emit a canonical agent runtime event to the gateway.
     """
     url = f"{base_url}{build_versioned_route(api_version, '/agent-events/ingest')}"
-    response = await session.post(url, json=payload, headers=headers)
+    response = await request("POST", url, json=payload, headers=headers)
     data: Dict[str, Any]
     try:
         data = response.json()

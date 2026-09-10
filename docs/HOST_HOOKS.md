@@ -39,6 +39,13 @@ outcomes through `PostToolUse` and `PostToolUseFailure`. Codex records a
 correlated tool result through `PostToolUse`; Codex does not provide a separate
 failure event.
 
+For callback-capable hosts, the local control service keeps a private, bounded
+delivery record after receiving the post-tool event so a local restart cannot
+lose the terminal observation. That record contains an opaque action binding
+and result size/digest only; it does not retain tool arguments, raw result
+content, credentials, or the signed directive. A host without a documented
+correlated post-tool callback is not represented as a local delivery failure.
+
 Calls to the `mcp__atellagent__*` facade deliberately skip host preflight and
 postflight because that facade is governed at its MCP effect boundary. Codex
 hosted or specialized tool paths that are outside its documented command-hook
@@ -73,12 +80,12 @@ never starts it, remains outside the adapter's control boundary.
 Add the TOML in `examples/config/codex-hooks.user.toml` to the user-level
 `~/.codex/config.toml` (or a trusted project configuration where appropriate).
 It uses synchronous command handlers for `UserPromptSubmit`, `PreToolUse`, and
-`PostToolUse`. The template also sets `network.allow_unix_sockets` to the
-exact control-socket path. Codex command hooks run in a sandbox, so this
-scoped allowance is required for the credential-free adapter to reach its
-owner-private control service. Do not substitute a parent-directory allowance
-or a TCP listener. Fully restart Codex after changing hook, MCP-server, or
-socket-permission configuration.
+`PostToolUse`. Codex command hooks run in a sandbox, so the template adds its
+exact-path Unix-socket allowlist for the credential-free adapter to reach its
+owner-private control service. The hook command invokes the adapter directly;
+nesting `codex sandbox` inside a hook is unsupported. Do not substitute a
+parent-directory allowance or a TCP listener. Fully restart Codex after
+changing hook, MCP-server, or socket-permission configuration.
 
 For managed deployment, place the corresponding block from
 `examples/config/codex-hooks.managed.toml` in the administrator-managed Codex
@@ -87,6 +94,22 @@ adapter executable, and set `allow_managed_hooks_only = true` in
 `requirements.toml` when users must not substitute user, project, session, or
 plugin hook configuration. Pin the installed client release and ensure only the
 administrator can modify the managed configuration and executable directory.
+
+### macOS
+
+Use `examples/config/codex-hooks.macos.toml` on macOS. Start the downloaded
+dashboard runtime configuration with the same owner-private socket path before
+opening Codex:
+
+```bash
+atellagent-cli ./downloaded-runtime.yaml \
+  --hook-control-socket /private/tmp/atellagent-codex-hook-control/control.sock
+```
+
+The dashboard-generated runtime configuration is authoritative; only the local
+socket path and matching Codex template are host-specific. Do not place the
+runtime configuration, enrollment token, or certificate material in
+`~/.codex/config.toml`.
 
 Codex's managed configuration layers, inline `[hooks]` syntax, and
 `allow_managed_hooks_only` setting are documented by OpenAI. Host hooks are an

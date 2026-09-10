@@ -9,14 +9,9 @@ from dataclasses import dataclass, asdict
 from typing import Any, Callable, Dict, Mapping, Optional
 import httpx
 
-from .auth import AuthManager
 from atellagent_client.protocol.context import apply_workflow_headers, get_workflow_context
 from .config import ServiceAccountConfig
-from .http import HTTPClientManager
-from .tls import (
-    build_gateway_cert_validator,
-    build_oauth_cert_validator,
-)
+from .gateway.session import GatewaySession
 
 
 @dataclass
@@ -91,40 +86,18 @@ def make_authenticated_telemetry_emitter(
     if not telemetry_url:
         return lambda event: None
 
-    auth_manager = AuthManager(service_account_config=config)
-    cert_tuple = None
-    if config.cert_path and config.key_path:
-        cert_tuple = (config.cert_path, config.key_path)
-
-    telemetry_validator = None
-    if config.gateway_url and telemetry_url.startswith(config.gateway_url):
-        telemetry_validator = build_gateway_cert_validator(config.gateway_url)
-
-    oauth_validator = build_oauth_cert_validator(auth_manager.get_token_url())
-
-    http_manager = HTTPClientManager(
-        timeout=config.timeout,
-        cert=cert_tuple,
-        server_identity_validator=telemetry_validator,
-    )
-    oauth_manager = HTTPClientManager(
-        timeout=config.timeout,
-        cert=cert_tuple,
-        server_identity_validator=oauth_validator,
-    )
+    gateway_session = GatewaySession.from_service_account_config(config)
 
     def _emit(event: TelemetryEvent) -> None:
         try:
-            client = http_manager.get_sync_client()
-            auth_client = oauth_manager.get_sync_client()
-            if not auth_manager.ensure_authenticated_sync(auth_client):
-                return
             payload, workflow_context = _event_payload_and_workflow_context(event)
             headers = apply_workflow_headers(
-                auth_manager.get_auth_headers(),
+                {},
                 workflow_context=workflow_context or get_workflow_context(),
             )
-            client.post(telemetry_url, json=payload, headers=headers)
+            gateway_session.request_authenticated_sync(
+                "POST", telemetry_url, json=payload, headers=headers
+            )
         except Exception:
             return
 
