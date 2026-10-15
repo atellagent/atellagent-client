@@ -8,7 +8,7 @@ Shared gateway session/auth construction for service-account integrations.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional
 
 import httpx
 
@@ -21,6 +21,7 @@ from atellagent_client.sdk.auth import AuthManager
 from atellagent_client.sdk.config import ServiceAccountConfig
 from atellagent_client.sdk.errors import AuthenticationError
 from atellagent_client.sdk.http import HTTPClientManager
+from .device_proof import DeviceProofProvider, request_device_headers, merge_request_headers
 from atellagent_client.sdk.tls import (
     build_gateway_cert_validator,
     build_oauth_cert_validator,
@@ -34,9 +35,11 @@ class GatewaySession:
     http_client_manager: HTTPClientManager
     oauth_http_client_manager: HTTPClientManager
     base_url: str
+    device_proof_provider: DeviceProofProvider | None = None
 
     @classmethod
-    def from_service_account_config(cls, config: ServiceAccountConfig) -> "GatewaySession":
+    def from_service_account_config(cls, config: ServiceAccountConfig, *,
+                                    device_proof_provider: DeviceProofProvider | None = None) -> "GatewaySession":
         auth_manager = AuthManager(service_account_config=config)
 
         cert_tuple = None
@@ -62,16 +65,14 @@ class GatewaySession:
             http_client_manager=http_client_manager,
             oauth_http_client_manager=oauth_http_client_manager,
             base_url=strip_api_suffix(config.gateway_url),
+            device_proof_provider=device_proof_provider,
         )
 
-    async def get_authenticated_request_context(
-        self,
-    ) -> Tuple[Optional[object], Optional[Dict[str, str]]]:
-        session = await self.http_client_manager.get_async_client()
+    async def _auth_headers_async(self) -> Dict[str, str]:
         auth_session = await self.oauth_http_client_manager.get_async_client()
         if not await self.auth_manager.ensure_authenticated_async(auth_session):
-            return None, None
-        return session, {
+            raise AuthenticationError("service-account authentication failed")
+        return {
             **build_client_compat_headers(
                 api_version=self.config.api_version,
                 contract_version=self.config.contract_version,
@@ -88,26 +89,31 @@ class GatewaySession:
         headers: Optional[Mapping[str, str]] = None,
         **kwargs: Any,
     ) -> object:
-        """Send once, refreshing a rejected cached access token exactly once."""
+        """Use one HTTP/2 connection per request; retry only before connection.
+
+        A response/read/write failure does not establish whether a request was
+        accepted. Do not resend it. The bounded server connection lifetime
+        cannot interrupt another request on a reused client connection.
+        """
         extra_headers = dict(headers or {})
         refreshed_token = False
         retried_transport = False
         while True:
-            client, auth_headers = await self.get_authenticated_request_context()
-            if client is None or auth_headers is None:
-                raise AuthenticationError("service-account authentication failed")
+            auth_headers = await self._auth_headers_async()
+            device_headers = request_device_headers(self.device_proof_provider,
+                base_url=self.base_url, method=method, url=url, options=kwargs)
             try:
-                response = await client.request(
-                    method,
-                    url,
-                    headers={**auth_headers, **extra_headers},
-                    **kwargs,
-                )
-            except httpx.TransportError:
+                async with self.http_client_manager.create_async_client() as client:
+                    response = await client.request(
+                        method,
+                        url,
+                        headers=merge_request_headers(auth_headers, extra_headers, device_headers),
+                        **kwargs,
+                    )
+            except (httpx.ConnectError, httpx.ConnectTimeout):
                 if retried_transport:
                     raise
                 retried_transport = True
-                await self.http_client_manager.reset_async_client()
                 continue
             if response.status_code != 401 or refreshed_token:
                 return response
@@ -122,40 +128,37 @@ class GatewaySession:
         headers: Optional[Mapping[str, str]] = None,
         **kwargs: Any,
     ) -> object:
-        """Send once, refreshing a rejected cached access token exactly once."""
+        """Use the same pre-connection-only recovery as the async path."""
         extra_headers = dict(headers or {})
         refreshed_token = False
         retried_transport = False
         while True:
-            client, auth_headers = self.get_authenticated_request_context_sync()
-            if client is None or auth_headers is None:
-                raise AuthenticationError("service-account authentication failed")
+            auth_headers = self._auth_headers_sync()
+            device_headers = request_device_headers(self.device_proof_provider,
+                base_url=self.base_url, method=method, url=url, options=kwargs)
             try:
-                response = client.request(
-                    method,
-                    url,
-                    headers={**auth_headers, **extra_headers},
-                    **kwargs,
-                )
-            except httpx.TransportError:
+                with self.http_client_manager.create_sync_client() as client:
+                    response = client.request(
+                        method,
+                        url,
+                        headers=merge_request_headers(auth_headers, extra_headers, device_headers),
+                        **kwargs,
+                    )
+            except (httpx.ConnectError, httpx.ConnectTimeout):
                 if retried_transport:
                     raise
                 retried_transport = True
-                self.http_client_manager.reset_sync_client()
                 continue
             if response.status_code != 401 or refreshed_token:
                 return response
             refreshed_token = True
             self.auth_manager.invalidate_token()
 
-    def get_authenticated_request_context_sync(
-        self,
-    ) -> Tuple[Optional[object], Optional[Dict[str, str]]]:
-        session = self.http_client_manager.get_sync_client()
+    def _auth_headers_sync(self) -> Dict[str, str]:
         auth_session = self.oauth_http_client_manager.get_sync_client()
         if not self.auth_manager.ensure_authenticated_sync(auth_session):
-            return None, None
-        return session, {
+            raise AuthenticationError("service-account authentication failed")
+        return {
             **build_client_compat_headers(
                 api_version=self.config.api_version,
                 contract_version=self.config.contract_version,

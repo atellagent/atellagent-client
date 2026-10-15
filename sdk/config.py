@@ -3,7 +3,6 @@
 
 """Public service-account and customer-runtime configuration contracts."""
 
-from .config_loader import load_service_account_config_from_yaml
 from .config_models import (
     BaseDeploymentConfig,
     BridgeDeploymentConfig,
@@ -18,5 +17,4 @@ __all__ = [
     "BridgeDeploymentConfig",
     "DeploymentConfig",
     "ServiceAccountConfig",
-    "load_service_account_config_from_yaml",
 ]
