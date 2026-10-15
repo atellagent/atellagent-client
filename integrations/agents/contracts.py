@@ -438,6 +438,7 @@ def receipt_from_preflight_response(
         action_binding_fingerprint=normalize_optional_text(
             response_payload.get("action_binding_fingerprint")
         ),
+        assessment_reference=normalize_optional_text(response_payload.get("assessment_reference")),
     )
 
 

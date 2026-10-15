@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import unittest
 import asyncio
+import json
 from types import SimpleNamespace
 
 from atellagent_client.protocol.agent_contracts import (
@@ -17,15 +18,52 @@ from atellagent_client.protocol.agent_contracts import (
 )
 from atellagent_client.integrations.agents.control_actions import execute_async
 from atellagent_client.integrations.agents.control_actions import preflight_async
-from atellagent_client.integrations.agents.control_model_invocation import (
+from atellagent_client.integrations.agents.control_model_decisions import (
     model_decision_async,
 )
 from atellagent_client.governance import ActionDenied
 from atellagent_client.sdk.config_models import SDKDeploymentConfig, ServiceAccountConfig
-from atellagent_client.sdk.errors import PolicyTransportError
+from atellagent_client.sdk.errors import PolicyTransportError, PolicyViolationError
+from atellagent_client.integrations.agents.control import ExternalAgentGovernance
+from atellagent_client.integrations.agents.hook_control import _safe_error_code
+from atellagent_client.integrations.agents.host_hook_responses import _pretool_result
 
 
 class ModelDecisionContractTests(unittest.TestCase):
+    def test_terminal_review_timeout_reaches_host_as_a_deny_with_retry_guidance(self):
+        with self.assertRaises(PolicyViolationError) as raised:
+            ExternalAgentGovernance._raise_gateway_error(None, 403, {"error": {
+                "violation_type": "semantic_action_review_timeout",
+                "message": "Semantic review timed out; the tool was not executed.",
+            }})
+        response = _pretool_result("codex", False, _safe_error_code(raised.exception))
+        output = json.loads(response.stdout)["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+        self.assertIn("unchanged tool call once", output["permissionDecisionReason"])
+
+    def test_explicit_preflight_timeout_is_distinct_from_other_server_errors(self):
+        for status, detail, expected in (
+            (504, {"code": "native_preflight_timeout"}, "control_timeout"),
+            (504, {}, "control_gateway_server_status"),
+            (503, {"code": "native_preflight_timeout"}, "control_gateway_server_status"),
+        ):
+            with self.assertRaises(PolicyTransportError) as raised:
+                ExternalAgentGovernance._raise_gateway_error(None, status, {"error": detail})
+            self.assertEqual(_safe_error_code(raised.exception), expected)
+
+    def test_quota_rejection_is_not_a_control_outage(self) -> None:
+        with self.assertRaises(PolicyViolationError) as raised:
+            ExternalAgentGovernance._raise_gateway_error(None, 429, {
+                "detail": {"error": "entitlement_denied",
+                           "code": "governed_action_decision_quota_exhausted"},
+            })
+        self.assertEqual(_safe_error_code(raised.exception),
+                         "governed_action_decision_quota_exhausted")
+        # An unrelated rate limit must not be reported as an account quota.
+        with self.assertRaises(RuntimeError) as other:
+            ExternalAgentGovernance._raise_gateway_error(None, 429, {})
+        self.assertNotIsInstance(other.exception, PolicyViolationError)
+
     def test_model_decision_binds_direct_admission_to_request_fingerprint(self) -> None:
         request = ModelDecisionRequest(
             input_scope="turn_entry",
@@ -210,6 +248,7 @@ class ModelDecisionContractTests(unittest.TestCase):
 
     def test_connected_agent_requires_cluster_provisioned_identity_mode(self) -> None:
         kwargs = {
+            "platform_origin": "https://platform.example",
             "client_id": "client-id",
             "gateway_url": "https://gateway.example",
             "oauth_token_url": "https://auth.example/token",

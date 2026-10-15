@@ -5,16 +5,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Awaitable, Callable, Mapping, Optional
 
 
-from atellagent_client.sdk.config import (
-    ServiceAccountConfig,
-    load_service_account_config_from_yaml,
-)
+from atellagent_client.sdk.config import ServiceAccountConfig
 from atellagent_client.sdk.gateway.session import GatewaySession
-from atellagent_client.protocol.agent_identity import has_bound_principal_identity
-from atellagent_client.protocol.api import build_versioned_route
 from atellagent_client.protocol.agent_contracts import (
     ExternalIdentityEvidence,
     GovernanceCallContext,
@@ -23,41 +18,49 @@ from atellagent_client.protocol.agent_contracts import (
     ModelDecision,
     ModelDecisionRequest,
 )
-from atellagent_client.protocol.context import (
-    apply_workflow_headers,
-    get_workflow_context,
-    merge_portable_workflow_context,
-    normalize_portable_workflow_context,
-)
-from atellagent_client.sdk.client_modules.runtime_authority import (
-    apply_runtime_authority_headers,
-)
-from atellagent_client.sdk.errors import PolicyTransportError, PolicyViolationError
-from atellagent_client.sdk.operations import APIOperations
 from atellagent_client.governance import RuntimeActionGate
-from atellagent_client.sdk.operations_modules.common import extract_policy_detail
 
-from . import control_actions as actions
-from . import control_model_invocation as chat
-from .contracts import BoundaryBootstrapResponse, extract_contract_workflow_context
 from .identity_mode import (
     resolve_identity_mode_from_config,
 )
 
 
-class ExternalAgentGovernance:
+from .control_gateway_transport import ControlGatewayTransportMixin
+from .control_mcp import ControlMCPMixin
+from .control_model_facade import ControlModelMixin
+from .control_action_facade import ControlActionMixin
+
+
+class ExternalAgentGovernance(
+    ControlGatewayTransportMixin,
+    ControlMCPMixin,
+    ControlModelMixin,
+    ControlActionMixin,
+):
+    """Public governance client composed from transport and operation owners."""
+
     def __init__(
         self,
         config: ServiceAccountConfig,
         *,
         session_provider: Optional[Callable[[], GatewaySession]] = None,
+        local_user_headers_provider: Optional[
+            Callable[[], Awaitable[Mapping[str, str]]]
+        ] = None,
+        device_proof_provider: Optional[
+            Callable[[str, str, Any], Mapping[str, str]]
+        ] = None,
     ) -> None:
         self.config = config
         self._session_provider = session_provider
         self._gateway_session = (
-            None if session_provider is not None else GatewaySession.from_service_account_config(config)
+            None
+            if session_provider is not None
+            else GatewaySession.from_service_account_config(config)
         )
         self._owns_gateway_session = session_provider is None
+        self._local_user_headers_provider = local_user_headers_provider
+        self._device_proof_provider = device_proof_provider
         self.identity_mode = resolve_identity_mode_from_config(config)
         self.action_gate = RuntimeActionGate.from_config(config)
 
@@ -69,424 +72,6 @@ class ExternalAgentGovernance:
         if self._gateway_session is None:  # pragma: no cover - constructor invariant
             raise RuntimeError("gateway session is unavailable")
         return self._gateway_session
-
-    @classmethod
-    def from_config_path(
-        cls,
-        config_path: str,
-    ) -> "ExternalAgentGovernance":
-        config = load_service_account_config_from_yaml(config_path)
-        return cls(config)
-
-    def _merge_context(
-        self,
-        *,
-        explicit_context: Optional[Dict[str, Any]],
-        principal_context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        merged = merge_portable_workflow_context(
-            explicit_context,
-            get_workflow_context(),
-        )
-        merged = merge_portable_workflow_context(principal_context, merged)
-        return normalize_portable_workflow_context(merged) or {}
-
-    def _raise_gateway_error(self, status_code: int, payload: Any) -> None:
-        if status_code >= 500:
-            error = PolicyTransportError("Remote control service is unavailable")
-            error.safe_code = "control_gateway_server_status"
-            raise error
-        detail = extract_policy_detail(payload)
-        if status_code == 403:
-            message = (
-                detail.get("message")
-                or detail.get("error")
-                or detail.get("detail")
-                or "Action blocked by policy"
-            )
-            raise PolicyViolationError(
-                str(message).strip() or "Action blocked by policy",
-                str(detail.get("violation_type") or "policy_violation"),
-                detail,
-            )
-        if isinstance(payload, dict):
-            message = payload.get("detail") or payload.get("message") or payload.get("error")
-            if isinstance(message, str) and message.strip():
-                raise RuntimeError(message.strip())
-        raise RuntimeError(f"gateway governance call failed with status {status_code}")
-
-    def _extract_principal_context(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return extract_contract_workflow_context(payload)
-
-    @staticmethod
-    def _has_bound_principal_context(workflow_context: Optional[Dict[str, Any]]) -> bool:
-        return has_bound_principal_identity(workflow_context)
-
-    def _request_gateway_sync(
-        self,
-        method: str,
-        url: str,
-        *,
-        workflow_context: Dict[str, Any],
-        request_headers: Optional[Mapping[str, str]] = None,
-        **kwargs: Any,
-    ) -> Any:
-        headers = apply_runtime_authority_headers(
-            apply_workflow_headers({}, workflow_context=workflow_context)
-        )
-        headers.update(dict(request_headers or {}))
-        return self.gateway_session.request_authenticated_sync(
-            method,
-            url,
-            headers=headers,
-            **kwargs,
-        )
-
-    async def _request_gateway_async(
-        self,
-        method: str,
-        url: str,
-        *,
-        workflow_context: Dict[str, Any],
-        request_headers: Optional[Mapping[str, str]] = None,
-        **kwargs: Any,
-    ) -> Any:
-        """Send one governed request with retry-safe runtime context headers."""
-
-        headers = apply_runtime_authority_headers(
-            apply_workflow_headers({}, workflow_context=workflow_context)
-        )
-        headers.update(dict(request_headers or {}))
-        return await self.gateway_session.request_authenticated(
-            method,
-            url,
-            headers=headers,
-            **kwargs,
-        )
-
-    async def mcp_communicate_async(
-        self,
-        *,
-        target_binding: str,
-        tool_name: str,
-        arguments: Dict[str, Any],
-        tool_call_id: str,
-    ) -> Dict[str, Any]:
-        """Invoke a governed MCP tool through this boundary's existing session."""
-
-        operations = APIOperations(
-            self.config.gateway_url,
-            api_version=self.config.api_version,
-            contract_version=self.config.contract_version,
-        )
-        return await operations.mcp_communicate_async(
-            lambda method, url, **kwargs: self._request_gateway_async(
-                method,
-                url,
-                workflow_context={},
-                request_headers=kwargs.pop("headers", None),
-                **kwargs,
-            ),
-            {},
-            str(self.config.service_account_id),
-            str(target_binding),
-            str(tool_name),
-            dict(arguments),
-            tool_call_id=tool_call_id,
-            action_context={"action_key": f"mcp-bridge-{tool_call_id}"},
-        )
-
-    async def mcp_catalog_async(self) -> Dict[str, Any]:
-        """Fetch this enrolled agent-control runtime's assigned MCP catalog."""
-
-        response = await self._request_gateway_async(
-            "GET",
-            f"{self.gateway_session.base_url}{build_versioned_route(self.config.api_version, '/agents/boundary/mcp-catalog')}",
-            workflow_context={},
-        )
-        payload = response.json() if response.content else {}
-        if response.status_code >= 400:
-            self._raise_gateway_error(response.status_code, payload)
-        if not isinstance(payload, dict) or payload.get("success") is not True:
-            raise RuntimeError("gateway MCP catalog response is invalid")
-        return payload
-
-    def _resolve_model_workflow_context_sync(
-        self,
-        *,
-        workflow_context: Optional[Dict[str, Any]],
-        identity: Optional[ExternalIdentityEvidence],
-    ) -> Dict[str, Any]:
-        return chat.resolve_model_workflow_context_sync(
-            self,
-            workflow_context=workflow_context,
-            identity=identity,
-        )
-
-    async def _resolve_model_workflow_context_async(
-        self,
-        *,
-        workflow_context: Optional[Dict[str, Any]],
-        identity: Optional[ExternalIdentityEvidence],
-    ) -> Dict[str, Any]:
-        return await chat.resolve_model_workflow_context_async(
-            self,
-            workflow_context=workflow_context,
-            identity=identity,
-        )
-
-    @staticmethod
-    def _build_model_invocation_payload(
-        *,
-        messages: List[Dict[str, Any]],
-        memory_thread_id: str,
-        stream: bool = False,
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        return chat.build_model_invocation_payload(
-            messages=messages,
-            memory_thread_id=memory_thread_id,
-            stream=stream,
-            **kwargs,
-        )
-
-    def _invoke_model_sync(
-        self,
-        *,
-        workflow_context: Dict[str, Any],
-        payload: Dict[str, Any],
-        poll_timeout_seconds: float = 300.0,
-        poll_interval_seconds: float = 0.5,
-    ) -> Dict[str, Any]:
-        return chat.invoke_model_sync(
-            self,
-            workflow_context=workflow_context,
-            payload=payload,
-            poll_timeout_seconds=poll_timeout_seconds,
-            poll_interval_seconds=poll_interval_seconds,
-        )
-
-    async def _invoke_model_async(
-        self,
-        *,
-        workflow_context: Dict[str, Any],
-        payload: Dict[str, Any],
-        poll_timeout_seconds: float = 300.0,
-        poll_interval_seconds: float = 0.5,
-    ) -> Dict[str, Any]:
-        return await chat.invoke_model_async(
-            self,
-            workflow_context=workflow_context,
-            payload=payload,
-            poll_timeout_seconds=poll_timeout_seconds,
-            poll_interval_seconds=poll_interval_seconds,
-        )
-
-    def bootstrap_sync(
-        self,
-        identity: ExternalIdentityEvidence,
-    ) -> BoundaryBootstrapResponse:
-        return actions.bootstrap_sync(self, identity)
-
-    async def bootstrap_async(
-        self,
-        identity: ExternalIdentityEvidence,
-    ) -> BoundaryBootstrapResponse:
-        return await actions.bootstrap_async(self, identity)
-
-    def preflight_sync(self, context: GovernanceCallContext) -> GovernanceReceipt:
-        return actions.preflight_sync(self, context)
-
-    async def preflight_async(self, context: GovernanceCallContext) -> GovernanceReceipt:
-        return await actions.preflight_async(self, context)
-
-    def postflight_sync(
-        self,
-        context: GovernanceCallContext,
-        *,
-        receipt: GovernanceReceipt,
-        result_payload: Any,
-        success: Optional[bool],
-        error_message: Optional[str] = None,
-        error_type: Optional[str] = None,
-        evidence: Optional[Dict[str, Any]] = None,
-        resource: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        return actions.postflight_sync(
-            self,
-            context,
-            receipt=receipt,
-            result_payload=result_payload,
-            success=success,
-            error_message=error_message,
-            error_type=error_type,
-            evidence=evidence,
-            resource=resource,
-        )
-
-    async def postflight_async(
-        self,
-        context: GovernanceCallContext,
-        *,
-        receipt: GovernanceReceipt,
-        result_payload: Any,
-        success: Optional[bool],
-        error_message: Optional[str] = None,
-        error_type: Optional[str] = None,
-        evidence: Optional[Dict[str, Any]] = None,
-        resource: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        return await actions.postflight_async(
-            self,
-            context,
-            receipt=receipt,
-            result_payload=result_payload,
-            success=success,
-            error_message=error_message,
-            error_type=error_type,
-            evidence=evidence,
-            resource=resource,
-        )
-
-    async def native_hook_outcome_async(
-        self,
-        *,
-        action_key: str,
-        action_binding_fingerprint: str,
-        outcome_observation: str,
-        success: Optional[bool],
-        result_byte_length: Optional[int] = None,
-        result_sha256: Optional[str] = None,
-        error_type: Optional[str] = None,
-    ) -> None:
-        return await actions.native_hook_outcome_async(
-            self,
-            action_key=action_key,
-            action_binding_fingerprint=action_binding_fingerprint,
-            outcome_observation=outcome_observation,
-            success=success,
-            result_byte_length=result_byte_length,
-            result_sha256=result_sha256,
-            error_type=error_type,
-        )
-
-    def execute_sync(
-        self,
-        callback: Callable[[], Any],
-        context: GovernanceCallContext,
-        *,
-        receipt: Optional[GovernanceReceipt] = None,
-        evidence: Optional[Dict[str, Any]] = None,
-        resource: Optional[Dict[str, Any]] = None,
-    ) -> Any:
-        return actions.execute_sync(
-            self,
-            callback,
-            context,
-            receipt=receipt,
-            evidence=evidence,
-            resource=resource,
-        )
-
-    async def execute_async(
-        self,
-        callback: Callable[[], Any],
-        context: GovernanceCallContext,
-        *,
-        receipt: Optional[GovernanceReceipt] = None,
-        evidence: Optional[Dict[str, Any]] = None,
-        resource: Optional[Dict[str, Any]] = None,
-    ) -> Any:
-        return await actions.execute_async(
-            self,
-            callback,
-            context,
-            receipt=receipt,
-            evidence=evidence,
-            resource=resource,
-        )
-
-    def guardrail_sync(self, context: GovernanceCallContext) -> GuardrailDecision:
-        return actions.guardrail_sync(self, context)
-
-    async def guardrail_async(self, context: GovernanceCallContext) -> GuardrailDecision:
-        return await actions.guardrail_async(self, context)
-
-    def governed_model_call_sync(
-        self,
-        *,
-        messages: List[Dict[str, Any]],
-        memory_thread_id: str,
-        workflow_context: Optional[Dict[str, Any]] = None,
-        identity: Optional[ExternalIdentityEvidence] = None,
-        stream: bool = False,
-        poll_timeout_seconds: float = 300.0,
-        poll_interval_seconds: float = 0.5,
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        return chat.governed_model_call_sync(
-            self,
-            messages=messages,
-            memory_thread_id=memory_thread_id,
-            workflow_context=workflow_context,
-            identity=identity,
-            stream=stream,
-            poll_timeout_seconds=poll_timeout_seconds,
-            poll_interval_seconds=poll_interval_seconds,
-            **kwargs,
-        )
-
-    async def governed_model_call_async(
-        self,
-        *,
-        messages: List[Dict[str, Any]],
-        memory_thread_id: str,
-        workflow_context: Optional[Dict[str, Any]] = None,
-        identity: Optional[ExternalIdentityEvidence] = None,
-        stream: bool = False,
-        poll_timeout_seconds: float = 300.0,
-        poll_interval_seconds: float = 0.5,
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        return await chat.governed_model_call_async(
-            self,
-            messages=messages,
-            memory_thread_id=memory_thread_id,
-            workflow_context=workflow_context,
-            identity=identity,
-            stream=stream,
-            poll_timeout_seconds=poll_timeout_seconds,
-            poll_interval_seconds=poll_interval_seconds,
-            **kwargs,
-        )
-
-    def model_decision_sync(
-        self,
-        request: ModelDecisionRequest,
-        *,
-        workflow_context: Optional[Dict[str, Any]] = None,
-        identity: Optional[ExternalIdentityEvidence] = None,
-    ) -> ModelDecision:
-        return chat.model_decision_sync(
-            self,
-            request=request,
-            workflow_context=workflow_context,
-            identity=identity,
-        )
-
-    async def model_decision_async(
-        self,
-        request: ModelDecisionRequest,
-        *,
-        workflow_context: Optional[Dict[str, Any]] = None,
-        identity: Optional[ExternalIdentityEvidence] = None,
-    ) -> ModelDecision:
-        return await chat.model_decision_async(
-            self,
-            request=request,
-            workflow_context=workflow_context,
-            identity=identity,
-        )
 
     def close(self) -> None:
         if self._owns_gateway_session:

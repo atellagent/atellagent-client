@@ -8,8 +8,9 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
-from uuid import uuid4
 
 from openai import AsyncOpenAI
 
@@ -17,24 +18,18 @@ from atellagent_client.integrations.agents.openai_facade import (
     OpenAIResponsesFacadeRuntime,
     translate_openai_response_request,
 )
-from atellagent_client.sdk.config_models import SDKDeploymentConfig, ServiceAccountConfig
 from atellagent_client.sdk.errors import PolicyTransportError, PolicyViolationError
 
 
 _TOKEN = "local-capability-token-for-openai-test-0001"
 
 
-def _config() -> ServiceAccountConfig:
-    return ServiceAccountConfig(
-        client_id="client-id", gateway_url="https://mtls.gateway.example",
-        oauth_token_url="https://mtls.auth.example/token", oauth_jwks_url="https://mtls.auth.example/jwks",
-        service_account_id=str(uuid4()), integration_id=str(uuid4()), tenant_id=str(uuid4()),
-        capabilities=["agent.control"], cert_path="/tmp/client.crt", key_path="/tmp/client.key",
-        integration_type="agent", identity_mode="boundary_identity_only", deployment=SDKDeploymentConfig(),
-    )
-
+from facade_support import identity
 
 class _Governance:
+    async def close_async(self):
+        pass
+
     def __init__(self) -> None:
         self.calls: list[dict] = []
         self.failure: Exception | None = None
@@ -52,11 +47,14 @@ class _Governance:
 
 class OpenAIResponsesFacadeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        config, binding = identity(Path(directory.name).resolve())
         self.governance = _Governance()
         constructor = patch("atellagent_client.integrations.agents.anthropic_facade.ExternalAgentGovernance", return_value=self.governance)
         constructor.start()
         self.addCleanup(constructor.stop)
-        self.runtime = OpenAIResponsesFacadeRuntime(_config(), capability_token=_TOKEN, host="127.0.0.1", port=0)
+        self.runtime = OpenAIResponsesFacadeRuntime(config, native_binding=binding, capability_token=_TOKEN, host="127.0.0.1", port=0)
         await self.runtime.start()
         self.addAsyncCleanup(self.runtime.stop)
 
