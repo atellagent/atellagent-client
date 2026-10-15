@@ -6,12 +6,10 @@
 from __future__ import annotations
 
 import asyncio
-import os
 
-from atellagent_client.examples import bundled_example_path
+from atellagent_client.examples.workload import load_workload_config, options
 from atellagent_client.connected import mount_agent_handler
 from atellagent_client.sdk import ConnectedSDKRuntime
-from atellagent_client.sdk.config import load_service_account_config_from_yaml
 
 
 def handler(payload: dict) -> dict:
@@ -21,9 +19,8 @@ def handler(payload: dict) -> dict:
     return {"content": f"Echo: {last}", "metadata": {"example": True}}
 
 
-async def run() -> None:
-    config_path = os.getenv("CONFIG_PATH") or bundled_example_path("config/agent.yaml")
-    config = load_service_account_config_from_yaml(config_path)
+async def run(directory, request_id) -> None:
+    config = await load_workload_config(directory, request_id, integration_type="agent", packaging="sdk")
     runtime = ConnectedSDKRuntime(config)
     mount_agent_handler(
         runtime,
@@ -38,4 +35,5 @@ async def run() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    args = options()
+    asyncio.run(run(args.state_directory, args.request_id))

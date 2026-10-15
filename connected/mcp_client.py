@@ -13,6 +13,7 @@ from typing import Any, Dict, Mapping, Optional
 from urllib.parse import urlparse
 
 from atellagent_client.sdk.config import BridgeDeploymentConfig
+from .mcp_errors import MCPTargetError
 
 MCP_PROTOCOL_VERSION = "2026-07-28"
 
@@ -20,20 +21,27 @@ MCP_PROTOCOL_VERSION = "2026-07-28"
 def _validate_discovery(result: Mapping[str, Any]) -> None:
     """Fail closed unless the local target speaks the pinned modern revision."""
     if result.get("resultType") != "complete":
-        raise ValueError("MCP discovery response must be complete")
+        raise MCPTargetError("mcp_target_discovery_invalid", "MCP discovery response must be complete")
     supported_versions = result.get("supportedVersions")
     if (
         not isinstance(supported_versions, list)
         or MCP_PROTOCOL_VERSION not in supported_versions
     ):
-        raise ValueError("MCP target does not support protocol 2026-07-28")
+        raise MCPTargetError("mcp_target_protocol_unsupported", "MCP target does not support protocol 2026-07-28")
     if result.get("cacheScope") not in {"public", "private"}:
-        raise ValueError("MCP discovery response must include a valid cache scope")
+        raise MCPTargetError("mcp_target_discovery_invalid", "MCP discovery response must include a valid cache scope")
     ttl_ms = result.get("ttlMs")
     if not isinstance(ttl_ms, int) or isinstance(ttl_ms, bool) or ttl_ms < 0:
-        raise ValueError("MCP discovery response must include a non-negative TTL")
+        raise MCPTargetError("mcp_target_discovery_invalid", "MCP discovery response must include a non-negative TTL")
     if not isinstance(result.get("capabilities"), Mapping):
-        raise ValueError("MCP discovery response must include capabilities")
+        raise MCPTargetError("mcp_target_discovery_invalid", "MCP discovery response must include capabilities")
+    experimental = result["capabilities"].get("experimental", {})
+    idempotency = experimental.get("atellagent/durableIdempotency") if isinstance(experimental, Mapping) else None
+    if (not isinstance(idempotency, Mapping)
+            or idempotency.get("key") != "atellagent/idempotencyKey"
+            or idempotency.get("durable") is not True):
+        raise MCPTargetError("mcp_target_idempotency_required",
+            "MCP target must advertise durable delivery idempotency support; a local assertion is insufficient")
 
 
 def _require_loopback_url(value: str) -> str:
@@ -64,9 +72,10 @@ class LocalMCPClient:
 
     def __init__(self, deployment: BridgeDeploymentConfig) -> None:
         if deployment.target_transport not in {"stdio", "http"}:
-            raise ValueError("LocalMCPClient requires a stdio or HTTP bridge target")
+            raise MCPTargetError("mcp_target_transport_unsupported", "LocalMCPClient requires a stdio or HTTP bridge target")
         self._deployment = deployment
-        self._stack: Optional[AsyncExitStack] = None
+        self._owner_task: Optional[asyncio.Task] = None
+        self._stop = asyncio.Event()
         self._client: Any = None
         self._connect_lock = asyncio.Lock()
 
@@ -108,23 +117,18 @@ class LocalMCPClient:
             )
         )
 
-    async def _connect(self) -> None:
-        if self._client is not None:
-            return
-        async with self._connect_lock:
-            if self._client is not None:
-                return
+    async def _own_connection(self, ready: asyncio.Future, stop: asyncio.Event) -> None:
+        try:
             try:
                 from mcp import Client, StdioServerParameters
                 from mcp.client.stdio import stdio_client
                 from mcp.client.streamable_http import streamable_http_client
             except ImportError as exc:
-                raise RuntimeError(
+                raise MCPTargetError("mcp_target_dependency_missing",
                     "MCP bridge support requires the 'mcp' package extra"
                 ) from exc
 
-            stack = AsyncExitStack()
-            try:
+            async with AsyncExitStack() as stack:
                 if self._deployment.target_transport == "stdio":
                     environment: Dict[str, str] = {}
                     for target_name, source_name in self._deployment.target_env_map.items():
@@ -150,16 +154,72 @@ class LocalMCPClient:
                         http_client=http_client,
                         terminate_on_close=False,
                     )
-                client = await stack.enter_async_context(
-                    Client(transport, mode=MCP_PROTOCOL_VERSION, cache=None)
-                )
-                discovery = await client.session.send_discover(MCP_PROTOCOL_VERSION)
+                async with asyncio.timeout(20):
+                    client = await stack.enter_async_context(
+                        Client(transport, mode=MCP_PROTOCOL_VERSION, cache=None)
+                    )
+                    discovery = await client.session.send_discover(MCP_PROTOCOL_VERSION)
                 _validate_discovery(discovery)
-            except Exception:
-                await stack.aclose()
+                ready.set_result(client)
+                await stop.wait()
+        except BaseException as exc:
+            if not ready.done():
+                ready.set_exception(exc)
+            raise
+
+    @staticmethod
+    def _observe_result(future: asyncio.Future) -> None:
+        if not future.cancelled():
+            future.exception()
+
+    async def _stop_connection(self, *, cancel_startup: bool = False) -> None:
+        owner = self._owner_task
+        self._client = None
+        if owner is None:
+            return
+        self._stop.set()
+        if cancel_startup and not owner.done() and not owner.cancelling():
+            owner.cancel()
+        # Shield the join, not just the cancellation request: cleanup must finish
+        # in the task that entered MCP/AnyIO contexts before ownership is dropped.
+        joined = asyncio.gather(owner, return_exceptions=True)
+        cancelled = None
+        while True:
+            try:
+                outcome = (await asyncio.shield(joined))[0]
+                break
+            except asyncio.CancelledError as exc:
+                cancelled = exc
+        if self._owner_task is owner:
+            self._owner_task = None
+        if cancelled is not None:
+            raise cancelled
+        if isinstance(outcome, BaseException) and not isinstance(outcome, asyncio.CancelledError):
+            raise outcome
+
+    async def _connect(self) -> Any:
+        async with self._connect_lock:
+            if self._owner_task is not None and self._owner_task.done():
+                await self._stop_connection()
+            if self._client is not None:
+                return self._client
+            ready = asyncio.get_running_loop().create_future()
+            ready.add_done_callback(self._observe_result)
+            self._stop = asyncio.Event()
+            self._owner_task = asyncio.create_task(
+                self._own_connection(ready, self._stop), name="local-mcp-connection-owner"
+            )
+            self._owner_task.add_done_callback(self._observe_result)
+            try:
+                client = await asyncio.shield(ready)
+            except BaseException:
+                try:
+                    await self._stop_connection(cancel_startup=True)
+                except Exception:
+                    pass  # Preserve the original startup failure after joining.
                 raise
-            self._stack = stack
             self._client = client
+            return client
 
     async def invoke(
         self,
@@ -181,15 +241,18 @@ class LocalMCPClient:
         if not effect_key:
             raise ValueError("MCP bridge idempotency key is required")
 
-        await self._connect()
+        client = await self._connect()
         try:
-            result = await self._client.call_tool(
+            result = await client.call_tool(
                 tool_name,
                 dict(arguments),
                 meta={"atellagent/idempotencyKey": effect_key},
             )
-        except Exception:
-            await self.close()
+        except Exception as exc:
+            try:
+                await self.close()
+            except Exception as cleanup_error:
+                exc.add_note(f"MCP cleanup also failed: {cleanup_error!r}")
             raise
         result_payload = result.model_dump(mode="json", by_alias=True, exclude_none=True)
         return {
@@ -200,8 +263,9 @@ class LocalMCPClient:
 
     async def manifest(self) -> Dict[str, Any]:
         """Read the target's public tool inventory for publication."""
-        await self._connect()
-        result = await self._client.list_tools(cache_mode="bypass")
+        client = await self._connect()
+        async with asyncio.timeout(20):
+            result = await client.list_tools(cache_mode="bypass")
         tools = [
             tool.model_dump(mode="json", by_alias=True, exclude_none=True)
             for tool in result.tools
@@ -209,10 +273,8 @@ class LocalMCPClient:
         return {"tools": tools}
 
     async def close(self) -> None:
-        stack, self._stack = self._stack, None
-        self._client = None
-        if stack is not None:
-            await stack.aclose()
+        async with self._connect_lock:
+            await self._stop_connection()
 
     async def __aenter__(self) -> "LocalMCPClient":
         await self._connect()

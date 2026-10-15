@@ -6,17 +6,15 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import TypedDict
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
-from atellagent_client.examples import bundled_example_path
+from atellagent_client.examples.workload import load_workload_config, options
 from atellagent_client.connected import mount_workflow_handler
 from atellagent_client.integrations.workflows import LangGraphWorkflowParticipant
 from atellagent_client.sdk import ConnectedSDKRuntime
-from atellagent_client.sdk.config import load_service_account_config_from_yaml
 
 
 class WorkflowState(TypedDict):
@@ -28,14 +26,14 @@ def respond(state: WorkflowState) -> dict:
     return {"result": f"Processed: {state['message']}"}
 
 
-async def run() -> None:
+async def run(directory, request_id) -> None:
+    config = await load_workload_config(directory, request_id, integration_type="workflow_runtime", packaging="sdk")
     builder = StateGraph(WorkflowState)
     builder.add_node("respond", respond)
     builder.add_edge(START, "respond")
     builder.add_edge("respond", END)
     graph = builder.compile(checkpointer=InMemorySaver())
-    config_path = os.getenv("CONFIG_PATH") or bundled_example_path("config/workflow.yaml")
-    runtime = ConnectedSDKRuntime(load_service_account_config_from_yaml(config_path))
+    runtime = ConnectedSDKRuntime(config)
     mount_workflow_handler(
         runtime,
         LangGraphWorkflowParticipant(graph=graph),
@@ -48,4 +46,5 @@ async def run() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    args = options()
+    asyncio.run(run(args.state_directory, args.request_id))

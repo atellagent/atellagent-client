@@ -8,6 +8,7 @@ from .contracts import (
     FilterRuntimeHandler,
     FilterRuntimeHandlerBase,
     ModelRuntimeHandler,
+    ModelContextRuntimeHandler,
     ModelRuntimeHandlerBase,
     ModelRuntimeInvocationRequest,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "FilterRuntimeHandler",
     "FilterRuntimeHandlerBase",
     "ModelRuntimeHandler",
+    "ModelContextRuntimeHandler",
     "ModelRuntimeHandlerBase",
     "ModelRuntimeInvocationRequest",
     "HuggingFaceTextClassificationFilter",

@@ -109,8 +109,11 @@ class MCPAgentProxyTests(unittest.IsolatedAsyncioTestCase):
             await _run_local_mcp_bridge("bridge.yaml")
 
         rendered = "\n".join(str(call.args[0]) for call in printed.call_args_list)
-        self.assertIn("Atellagent MCP local control is unavailable", rendered)
+        self.assertIn("Atellagent MCP control could not complete the request", rendered)
         self.assertNotIn("control_socket_access_denied", rendered)
+        response = json.loads(printed.call_args_list[-1].args[0])
+        self.assertEqual(response["id"], 2)
+        self.assertEqual(response["error"]["code"], -32000)
 
     def test_local_bridge_config_has_no_client_credential_path(self) -> None:
         import tempfile
@@ -124,6 +127,22 @@ class MCPAgentProxyTests(unittest.IsolatedAsyncioTestCase):
             )
             config = load_local_mcp_bridge_config(str(path))
         self.assertEqual(config.control_socket, "/private/tmp/atellagent/control.sock")
+
+    def test_windows_local_bridge_config_accepts_only_the_local_named_pipe(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bridge.windows.yaml"
+            path.write_text(
+                "control_socket: '\\\\.\\pipe\\atellagent-hook-control'\n",
+                encoding="utf-8",
+            )
+            with patch(
+                "atellagent_client.proxy.bridge_config._is_windows", return_value=True
+            ):
+                config = load_local_mcp_bridge_config(str(path))
+        self.assertEqual(config.control_socket, r"\\.\pipe\atellagent-hook-control")
     def test_native_result_extraction_keeps_content_blocks(self) -> None:
         result = _mcp_tool_result(
             {
@@ -233,6 +252,40 @@ class MCPAgentProxyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.protocol, MCPPeerProtocol.LEGACY_STREAMABLE_HTTP)
                 self.assertTrue(response.session_id)
 
+    async def test_unknown_initialize_offers_supported_revision_and_binds_it(self) -> None:
+        gateway = _Gateway()
+        proxy = MCPAgentProxy(gateway=gateway)
+        initialized = await proxy.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2099-01-01"}})
+        self.assertEqual(initialized.document["result"]["protocolVersion"], "2025-11-25")
+        session = {"Mcp-Session-Id": initialized.session_id, "MCP-Protocol-Version": "2025-11-25"}
+        listed = await proxy.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, headers=session)
+        self.assertEqual(listed.document["result"]["tools"][0]["name"], "echo")
+        with self.assertRaises(MCPAgentProxyError):
+            await proxy.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/list"},
+                headers={**session, "MCP-Protocol-Version": "2099-01-01"})
+        self.assertEqual(gateway.calls, [])
+
+    async def test_stdio_fallback_retains_negotiated_revision_not_requested_revision(self) -> None:
+        proxy = MCPAgentProxy(gateway=_Gateway())
+        result = json.loads(await proxy.handle_json_line(json.dumps({"jsonrpc": "2.0", "id": 1,
+            "method": "initialize", "params": {"protocolVersion": "2099-01-01"}})))
+        self.assertEqual(result["result"]["protocolVersion"], "2025-11-25")
+        listed = json.loads(await proxy.handle_json_line(json.dumps({"jsonrpc": "2.0", "id": 2,
+            "method": "tools/list", "params": {}})))
+        self.assertEqual(listed["result"]["tools"][0]["name"], "echo")
+
+    async def test_initialize_rejects_malformed_revisions_before_catalog(self) -> None:
+        gateway = _Gateway()
+        gateway.list_tools = AsyncMock()
+        for revision in (None, 123, "", "2025-99-99", "20251125", " 2025-11-25"):
+            with self.subTest(revision=revision):
+                proxy = MCPAgentProxy(gateway=gateway)
+                result = json.loads(await proxy.handle_json_line(json.dumps({"jsonrpc": "2.0", "id": 1,
+                    "method": "initialize", "params": {"protocolVersion": revision}})))
+                self.assertEqual(result["error"]["code"], -32600)
+        gateway.list_tools.assert_not_awaited()
+
     async def test_ambiguous_legacy_negotiation_fails_closed(self) -> None:
         proxy = MCPAgentProxy(gateway=_Gateway())
         with self.assertRaisesRegex(MCPAgentProxyError, "disagree"):
@@ -251,12 +304,32 @@ class MCPAgentProxyTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(MCPAgentProxyError):
             await proxy.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}})
 
-    async def test_stdio_keeps_only_its_bounded_legacy_connection_session(self) -> None:
+    async def test_stdio_keeps_negotiation_for_the_connection_lifetime(self) -> None:
         proxy = MCPAgentProxy(gateway=_Gateway())
-        initialized = await proxy.handle_json_line(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {}}}))
+        with patch("atellagent_client.proxy.agent.monotonic", return_value=100):
+            initialized = await proxy.handle_json_line(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {}}}))
         self.assertIn("protocolVersion", initialized or "")
-        listed = await proxy.handle_json_line(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}))
+        with patch("atellagent_client.proxy.agent.monotonic", return_value=100000):
+            listed = await proxy.handle_json_line(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}))
+            called = await proxy.handle_json_line(json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "echo", "arguments": {"text": "hello"}}}))
         self.assertIn("echo", listed or "")
+        self.assertEqual(json.loads(called)["result"]["content"][0]["text"], "ok")
+
+    async def test_stdio_request_errors_keep_the_call_id(self) -> None:
+        proxy = MCPAgentProxy(gateway=_Gateway())
+        rejected = await proxy.handle_json_line(json.dumps({"jsonrpc": "2.0", "id": 77, "method": "tools/call", "params": {"name": "echo"}}))
+        self.assertEqual(json.loads(rejected)["id"], 77)
+        self.assertIn("error", json.loads(rejected))
+        invalid = await proxy.handle_json_line("not-json")
+        self.assertIsNone(json.loads(invalid)["id"])
+        self.assertEqual(json.loads(invalid)["error"]["code"], -32700)
+
+    async def test_http_sessions_still_expire(self) -> None:
+        proxy = MCPAgentProxy(gateway=_Gateway())
+        with patch("atellagent_client.proxy.agent.monotonic", return_value=100):
+            response = await proxy.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}})
+        with patch("atellagent_client.proxy.agent.monotonic", return_value=100000), self.assertRaisesRegex(MCPAgentProxyError, "expired"):
+            await proxy.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, headers={"Mcp-Session-Id": response.session_id})
 
 
 class MCPToolProxyTests(unittest.IsolatedAsyncioTestCase):

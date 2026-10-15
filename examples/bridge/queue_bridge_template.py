@@ -9,10 +9,11 @@ import argparse
 import asyncio
 
 from atellagent_client.connected import ConnectedBridge, mount_agent_handler
-from atellagent_client.sdk.config import load_service_account_config_from_yaml
+from atellagent_client.examples.workload import load_workload_config, add_workload_options
 
 
-async def run(config_path: str) -> None:
+async def run(directory, request_id) -> None:
+    config = await load_workload_config(directory, request_id, integration_type="agent", packaging="bridge")
     async def handler(payload: dict) -> dict:
         effect_key = str(
             payload.get("communication_metadata", {}).get("communication_id") or ""
@@ -22,7 +23,7 @@ async def run(config_path: str) -> None:
         await asyncio.sleep(0)
         return {"content": f"replace with queue response for {effect_key}"}
 
-    runtime = ConnectedBridge(load_service_account_config_from_yaml(config_path))
+    runtime = ConnectedBridge(config)
     mount_agent_handler(runtime, handler, target_idempotent=True)
     try:
         await runtime.run_forever()
@@ -32,9 +33,9 @@ async def run(config_path: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
+    add_workload_options(parser)
     args = parser.parse_args()
-    asyncio.run(run(args.config))
+    asyncio.run(run(args.state_directory, args.request_id))
 
 
 if __name__ == "__main__":

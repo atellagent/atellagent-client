@@ -1,11 +1,12 @@
 # Copyright (c) 2026 Atellagent, Inc. All rights reserved.
 # This source code is licensed under the terms found in the LICENSE.md file in the root directory of this source tree.
 
-"""Verification of one HSM-signed connected delivery capability."""
+"""Verification of one server-signed connected delivery capability."""
 
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 from typing import Any, Dict
@@ -93,7 +94,7 @@ class ConnectedCapabilityValidator:
             raise ConnectedProtocolError("connected capability audience binding mismatch")
         expected = {
             "typ": "atellagent_connected_runtime_capability",
-            "schema_version": "v1",
+            "schema_version": "v2",
             "sub": message.message_id,
             "tenant_id": str(self._config.tenant_id),
             "target_service_account_id": str(self._config.service_account_id),
@@ -101,6 +102,11 @@ class ConnectedCapabilityValidator:
             "target_certificate_public_key_sha256": self._certificate_public_key_sha256,
             "integration_type": str(self._config.integration_type),
             "operation": message.operation,
+            "payload_schema": message.payload_schema,
+            "payload_sha256": hashlib.sha256(json.dumps(
+                message.payload, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")).hexdigest(),
             "message_id": message.message_id,
             "lease_id": message.lease.lease_id,
             "delivery_attempt": message.lease.attempt_number,

@@ -30,6 +30,7 @@ from atellagent_client.integrations.workflows.connected_actions import (
 )
 
 from .actions import ConnectedActionClient
+from .agent_actions import _bind_agent_actions, _reset_agent_actions
 from .contracts import ConnectedDelivery, ConnectedHandlerResult
 from .participant import ConnectedParticipant
 
@@ -103,7 +104,11 @@ def mount_agent_handler(
         communication_id = str(communication.get("communication_id") or "")
         if communication_id != delivery.idempotency_key:
             raise ValueError("agent communication idempotency binding mismatch")
-        raw_result = await _await(handler(payload))
+        token = _bind_agent_actions(_actions)
+        try:
+            raw_result = await _await(handler(payload))
+        finally:
+            _reset_agent_actions(token)
         if isinstance(raw_result, Mapping):
             result = dict(raw_result)
         elif raw_result is None:
@@ -143,7 +148,21 @@ def mount_model_handler(
         request_payload = _object(envelope.get("input"), "model input")
         request_payload.setdefault("request_id", delivery.idempotency_key)
         request = coerce_model_runtime_invocation_request(request_payload)
-        result = coerce_model_runtime_result(await handler.invoke_model(request))
+        if request.context_operation == "measure":
+            from atellagent_client.protocol.model_context import (
+                validate_model_context_result,
+            )
+
+            measure = getattr(handler, "measure_model_context", None)
+            if not callable(measure):
+                raise ValueError(
+                    "Model context measurement is unsupported by this handler"
+                )
+            result = validate_model_context_result(
+                await _await(measure(request)), request
+            )
+        else:
+            result = coerce_model_runtime_result(await handler.invoke_model(request))
         return ConnectedHandlerResult.succeeded(
             result_schema="atellagent.connected.model-result.v1",
             result_payload=result,
@@ -312,12 +331,16 @@ def _workflow_outcome(result: Any) -> ConnectedHandlerResult:
     if outcome == "failed":
         error = value.get("error")
         payload["error"] = (
-            dict(error) if isinstance(error, Mapping) else {"detail": str(error or "failed")}
+            dict(error)
+            if isinstance(error, Mapping)
+            else {"detail": str(error or "failed")}
         )
     if outcome == "suspended":
         wait = value.get("wait")
         if not isinstance(wait, Mapping):
-            raise ValueError("suspended workflow result requires a complete wait object")
+            raise ValueError(
+                "suspended workflow result requires a complete wait object"
+            )
         payload["wait"] = dict(wait)
     execution_time_ms = value.get("execution_time_ms")
     if execution_time_ms is not None:
@@ -361,7 +384,9 @@ def mount_workflow_handler(
                     coerce_workflow_participant_cancel_request(request)
                 )
             else:
-                raise ValueError("workflow operation is not supported by this participant")
+                raise ValueError(
+                    "workflow operation is not supported by this participant"
+                )
             return _workflow_outcome(result)
         except Exception as exc:
             return ConnectedHandlerResult(
