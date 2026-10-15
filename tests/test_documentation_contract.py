@@ -95,6 +95,22 @@ class DocumentationContractTests(unittest.TestCase):
         for path in self.docs:
             self.assertIn(path, source_paths, path)
 
+    def test_checkout_fixtures_are_not_imported_from_the_installed_package(self) -> None:
+        for source in (self.root / "tests").rglob("*.py"):
+            tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    names = [node.module]
+                else:
+                    continue
+                for name in names:
+                    self.assertFalse(
+                        name == "atellagent_client.tests" or name.startswith("atellagent_client.tests."),
+                        f"{source.relative_to(self.root)} imports a fixture excluded from the installed package",
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()
