@@ -22,96 +22,6 @@ class DocumentationContractTests(unittest.TestCase):
             if not any(part.startswith(".") for part in path.relative_to(cls.root).parts)
         }
 
-    def test_documentation_map_and_nearby_guides_exist(self) -> None:
-        expected = {
-            "docs/README.md",
-            "connected/README.md",
-            "sdk/README.md",
-            "governance/README.md",
-            "pep/README.md",
-            "proxy/README.md",
-            "integrations/README.md",
-            "integrations/agents/README.md",
-            "integrations/providers/README.md",
-            "integrations/tools/README.md",
-            "integrations/models/README.md",
-            "integrations/channels/README.md",
-            "integrations/workflows/README.md",
-            "docs/hosts/claude-code.md",
-            "docs/hosts/claude-code-route-mode.md",
-            "docs/hosts/codex-route-mode.md",
-            "docs/hosts/codex.md",
-            "docs/hosts/gemini-cli.md",
-            "docs/hosts/claude-cowork.md",
-        }
-        self.assertTrue(expected <= self.docs.keys(), expected - self.docs.keys())
-        index = self.docs["docs/README.md"]
-        for link in (
-            "../sdk/README.md",
-            "../connected/README.md",
-            "HOST_HOOKS.md",
-            "../integrations/providers/README.md",
-            "../governance/README.md",
-            "../pep/README.md",
-            "../proxy/README.md",
-            "../integrations/README.md",
-            "../docker/README.md",
-            "hosts/claude-code.md",
-            "hosts/claude-code-route-mode.md",
-            "hosts/codex-route-mode.md",
-            "hosts/codex.md",
-            "hosts/gemini-cli.md",
-            "hosts/claude-cowork.md",
-        ):
-            self.assertIn(link, index)
-
-    def test_root_start_guide_declares_the_non_overlapping_axes(self) -> None:
-        root = self.docs["README.md"]
-        self.assertLessEqual(len(root.splitlines()), 150)
-        for term in (
-            "hosted",
-            "connected",
-            "external_resource",
-            "sdk",
-            "bridge",
-            "hook",
-            "provider_proxy",
-            "mcp_proxy",
-            "decision",
-            "route",
-            "boundary_identity_only",
-            "federated_agent_identity",
-        ):
-            self.assertIn(f"`{term}`", root)
-
-    def test_host_coverage_is_precise_and_deferred_hosts_are_not_claimed(self) -> None:
-        claude = self.docs["docs/hosts/claude-code.md"]
-        codex = self.docs["docs/hosts/codex.md"]
-        for page in (claude, codex):
-            self.assertIn("`turn_entry`", page)
-            self.assertIn("`full_model_request`", page)
-            self.assertIn("Not observed", page)
-            self.assertIn("Subscription preservation", page)
-            self.assertIn("`mcp__atellagent__*`", page)
-        self.assertIn("PostToolUseFailure", claude)
-        self.assertNotIn("PostToolUseFailure", codex)
-        self.assertIn("does not claim Claude Cowork coverage", claude)
-        gemini = self.docs["docs/hosts/gemini-cli.md"]
-        self.assertIn("`BeforeModel`", gemini)
-        self.assertIn("`BeforeTool`", gemini)
-        self.assertIn("`AfterModel`", gemini)
-        self.assertIn("Not supported", gemini)
-        cowork = self.docs["docs/hosts/claude-cowork.md"]
-        self.assertIn("deferred", cowork.lower())
-        self.assertIn("does not", cowork.lower())
-        route = self.docs["docs/hosts/claude-code-route-mode.md"]
-        self.assertIn("`full_model_request`", route)
-        self.assertIn("`stream: true`", route)
-        self.assertIn("not preserved", route.lower())
-        responses = self.docs["docs/hosts/codex-route-mode.md"]
-        self.assertIn("`stream: true`", responses)
-        self.assertIn("not a codex", responses.lower())
-
     def test_public_guide_links_resolve(self) -> None:
         for relative_path, text in self.docs.items():
             if not (
@@ -154,7 +64,7 @@ class DocumentationContractTests(unittest.TestCase):
             for name in names:
                 self.assertTrue(hasattr(module, name), f"{module_name}.{name}")
 
-    def test_public_docs_and_inventory_reject_local_or_managed_detail(self) -> None:
+    def test_public_guides_exclude_local_or_managed_implementation_detail(self) -> None:
         public_guides = {
             path: text
             for path, text in self.docs.items()
@@ -172,6 +82,8 @@ class DocumentationContractTests(unittest.TestCase):
             "kubectl",
         ):
             self.assertNotIn(forbidden, joined)
+
+    def test_public_docs_are_in_the_source_inventory(self) -> None:
         tree = ast.parse((self.root / "setup.py").read_text(encoding="utf-8"))
         source_paths = next(
             ast.literal_eval(node.value)

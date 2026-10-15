@@ -7,8 +7,9 @@ rejects `stream: true`.
 
 ## Before you start
 
-Provision and enroll the standard boundary-only connected `agent` with only
-the `agent.control` capability. Create a random local capability token in an
+Complete device setup and approval/consent for a native request with only
+the `agent.control` capability. Use its saved request ID on this installation.
+Create a random local capability token in an
 absolute, owner-only file. The token authenticates a local API client to the
 facade; it is not an Atellagent service-account credential, OpenAI API key, or
 ChatGPT subscription credential.
@@ -16,7 +17,7 @@ ChatGPT subscription credential.
 Start the facade on loopback only:
 
 ```bash
-atellagent-openai-facade ./route-agent.yaml \
+atellagent-openai-facade --request-id YOUR_APPROVED_REQUEST_ID \
   --token-file /absolute/private/atellagent-route-token \
   --listen 127.0.0.1:8788
 ```

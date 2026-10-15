@@ -2,6 +2,16 @@ Copyright (c) 2026 Atellagent, Inc. All rights reserved. See [LICENSE.md](http:/
 
 # Changelog
 
+## 0.9.1
+
+- Added private native-host setup, discovery, credential selection, and governed
+  hook configuration and execution.
+- Aligned documented integrations with the public factory and client APIs.
+- Updated locked cryptography and PyJWT dependencies and the pinned Python image
+  base; added an inventory for bundled native components.
+- Made CI install its test tools explicitly and corrected native-hook test
+  isolation across concurrent calls and simulated platforms.
+
 ## 0.9.0
 
 - Added native OpenAI, Google, and Anthropic function-tool adapters.

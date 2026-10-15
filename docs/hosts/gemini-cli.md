@@ -1,7 +1,8 @@
-# Gemini CLI coverage
+# Gemini CLI preview coverage
 
-Atellagent supports Gemini CLI through synchronous local command hooks and an
-enrolled local hook-control service. Use
+Gemini CLI support is coming soon. This preview adapter implements synchronous
+local command hooks with an enrolled local hook-control service, but has not
+completed release acceptance. For development testing, use
 `examples/config/gemini-cli-hooks.user.json` with the common
 [host-hook guide](../HOST_HOOKS.md).
 

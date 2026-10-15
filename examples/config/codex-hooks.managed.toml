@@ -7,11 +7,18 @@ allow_unix_sockets = ["/run/user/<uid>/atellagent/control.sock"]
 [hooks]
 managed_dir = "/opt/atellagent/hooks"
 
+# Optional local Atellagent MCP bridge. Keep the executable in the
+# administrator-managed directory.
+[mcp_servers.atellagent]
+command = "/opt/atellagent/hooks/atellagent-mcp-bridge"
+args = ["--config", "/absolute/path/to/local-mcp-bridge.yaml"]
+startup_timeout_sec = 30
+
 [[hooks.UserPromptSubmit]]
-hooks = [{ type = "command", command = "/opt/atellagent/hooks/atellagent-hook-adapter --host codex --socket /run/user/<uid>/atellagent/control.sock", timeout = 8 }]
+hooks = [{ type = "command", command = "/opt/atellagent/hooks/atellagent-hook-adapter --host codex --socket /run/user/<uid>/atellagent/control.sock", timeout = 20, statusMessage = "Atellagent: checking prompt" }]
 
 [[hooks.PreToolUse]]
-hooks = [{ type = "command", command = "/opt/atellagent/hooks/atellagent-hook-adapter --host codex --socket /run/user/<uid>/atellagent/control.sock", timeout = 8 }]
+hooks = [{ type = "command", command = "/opt/atellagent/hooks/atellagent-hook-adapter --host codex --socket /run/user/<uid>/atellagent/control.sock", timeout = 20, statusMessage = "Atellagent: checking tool action" }]
 
 [[hooks.PostToolUse]]
-hooks = [{ type = "command", command = "/opt/atellagent/hooks/atellagent-hook-adapter --host codex --socket /run/user/<uid>/atellagent/control.sock", timeout = 8 }]
+hooks = [{ type = "command", command = "/opt/atellagent/hooks/atellagent-hook-adapter --host codex --socket /run/user/<uid>/atellagent/control.sock", timeout = 20, statusMessage = "Atellagent: recording tool result" }]

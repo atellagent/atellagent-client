@@ -9,16 +9,17 @@ command-hook adapter remains the supported host integration; it provides
 
 ## Before you start
 
-Provision and enroll the standard boundary-only connected `agent` with only
-the `agent.control` capability. Create a random local capability token in an
-absolute, owner-only file. The token authenticates Claude Code to the local
+Complete device setup and approval/consent for a native request with only
+the `agent.control` capability. Use its saved request ID on this installation.
+Create a random local capability token in an
+absolute, owner-only file. The token authenticates a non-streaming API client to the local
 facade; it is not an Atellagent service-account credential, provider API key,
 or Claude subscription credential.
 
 Start the facade on loopback only:
 
 ```bash
-atellagent-anthropic-facade ./route-agent.yaml \
+atellagent-anthropic-facade --request-id YOUR_APPROVED_REQUEST_ID \
   --token-file /absolute/private/atellagent-route-token \
   --listen 127.0.0.1:8787
 ```
