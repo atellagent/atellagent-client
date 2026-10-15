@@ -27,10 +27,6 @@ _PUBLIC_EXPORTS = {
     "create_service_account_client",
     "ServiceAccountConfig",
     "ConnectedSDKRuntime",
-    "load_service_account_config_from_yaml",
-    "CertificateEnrollmentError",
-    "CertificateEnrollmentResult",
-    "enroll_service_account_certificate",
     "PolicyViolationError",
     "AuthenticationError",
     "TelemetryEvent",
@@ -52,7 +48,7 @@ def __getattr__(name: str) -> Any:
 
         return getattr(_sdk, name)
     if name == "cli_main":
-        from .cli import main as _cli_main
+        from .cli.entry import main as _cli_main
 
         return _cli_main
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
