@@ -15,6 +15,13 @@ from `atellagent_client.pep`. A connected directive verifier is configured from
 the enrolled boundary; private keys and provider credentials remain outside the
 PEP call.
 
+A signed directive must match the local action, arguments, host context, decision
+and correlation. Tenant, execution and workspace claims must also match the
+local intent exactly: a missing or null claim cannot satisfy a specified local
+scope. A scope remains optional when neither side specifies it. Signature
+verification and these bindings do not independently establish that a stored
+policy or delegation is still current; the Gateway owns release revalidation.
+
 ## Failure semantics and exclusions
 
 Malformed local manifests, invalid directives, missing required capabilities,

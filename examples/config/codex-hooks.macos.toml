@@ -3,11 +3,18 @@
 [network]
 allow_unix_sockets = ["/private/tmp/atellagent-codex-hook-control/control.sock"]
 
+# Optional local Atellagent MCP bridge. Do not configure a duplicate public MCP
+# connection for the same local integration.
+[mcp_servers.atellagent]
+command = "atellagent-mcp-bridge"
+args = ["--config", "/absolute/path/to/local-mcp-bridge.yaml"]
+startup_timeout_sec = 30
+
 [[hooks.UserPromptSubmit]]
-hooks = [{ type = "command", command = "atellagent-hook-adapter --host codex --socket /private/tmp/atellagent-codex-hook-control/control.sock", timeout = 8 }]
+hooks = [{ type = "command", command = "python -m atellagent_client.hook_launcher --host codex --socket /private/tmp/atellagent-codex-hook-control/control.sock", timeout = 20, statusMessage = "Atellagent: checking prompt" }]
 
 [[hooks.PreToolUse]]
-hooks = [{ type = "command", command = "atellagent-hook-adapter --host codex --socket /private/tmp/atellagent-codex-hook-control/control.sock", timeout = 8 }]
+hooks = [{ type = "command", command = "python -m atellagent_client.hook_launcher --host codex --socket /private/tmp/atellagent-codex-hook-control/control.sock", timeout = 20, statusMessage = "Atellagent: checking tool action" }]
 
 [[hooks.PostToolUse]]
-hooks = [{ type = "command", command = "atellagent-codex-posttool-adapter --socket /private/tmp/atellagent-codex-hook-control/control.sock", timeout = 8 }]
+hooks = [{ type = "command", command = "atellagent-codex-posttool-adapter --socket /private/tmp/atellagent-codex-hook-control/control.sock", timeout = 20, statusMessage = "Atellagent: recording tool result" }]

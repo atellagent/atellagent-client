@@ -2,8 +2,8 @@
 # Copyright (c) 2026 Atellagent, Inc. All rights reserved.
 # This source code is licensed under the terms found in the LICENSE.md file in the root directory of this source tree.
 
-# `3.11.16-slim-bookworm`, pinned to its multi-platform OCI index on 2026-08-16.
-FROM python:3.11.16-slim-bookworm@sha256:2e32f7d302adc1c37428355c1e646897c0c53f4fd60b6a551245fb90ee129f91
+# `3.11.17-slim-bookworm`, pinned to its multi-platform OCI index on 2026-10-13.
+FROM python:3.11.17-slim-bookworm@sha256:0a310eeecf4e1f5a0743f9a6520c90c88d089c903ca5fd283f501e3a805f5f89
 
 ARG CLIENT_VERSION
 ARG VCS_REF
@@ -36,13 +36,9 @@ COPY dist/atellagent_client-*.whl /tmp/
 COPY requirements/container-core-py311.lock /tmp/container-core-py311.lock
 COPY LICENSE.md THIRD_PARTY_NOTICES.md /licenses/
 
-# The pinned upstream Python image currently contains libpcre2-8-0 10.42-1.
-# Apply Debian's exact, remediated security build while retaining the immutable
-# base digest. This intentionally fails closed if that fixed version disappears.
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends --only-upgrade \
-      libpcre2-8-0=10.42-1+deb12u1 \
-    && rm -rf /var/lib/apt/lists/*
+# The pinned base includes Debian security updates for OpenSSL, Perl and PCRE2.
+# Native components bundled by Python wheels are inventoried after installation.
+COPY security/native_components.py /tmp/native_components.py
 
 RUN test -n "$CLIENT_VERSION" \
     && test -n "$VCS_REF" \
@@ -54,6 +50,8 @@ RUN test -n "$CLIENT_VERSION" \
     && pip install --no-deps "$wheel" \
     && pip install --only-binary=:all: --require-hashes -r /tmp/container-core-py311.lock \
     && pip check \
+    && python /tmp/native_components.py /licenses/native-components.spdx.json --created "$BUILD_DATE" \
+    && rm /tmp/native_components.py \
     && rm -rf "$wheel" /tmp/container-core-py311.lock /root/.cache \
     && rm -rf /usr/local/bin/pip* /usr/local/bin/wheel \
       /usr/local/lib/python3.11/site-packages/pip \
@@ -61,7 +59,9 @@ RUN test -n "$CLIENT_VERSION" \
       /usr/local/lib/python3.11/site-packages/setuptools \
       /usr/local/lib/python3.11/site-packages/setuptools-*.dist-info \
       /usr/local/lib/python3.11/site-packages/wheel \
-      /usr/local/lib/python3.11/site-packages/wheel-*.dist-info
+      /usr/local/lib/python3.11/site-packages/wheel-*.dist-info \
+      /usr/local/lib/python3.11/site-packages/packaging \
+      /usr/local/lib/python3.11/site-packages/packaging-*.dist-info
 
 # The image contains no listener. Runtime state must be supplied through the
 # documented writable identity/runtime mounts and a tmpfs at /tmp.

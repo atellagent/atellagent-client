@@ -1,0 +1,8 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python -m atellagent_client.hook_launcher --host claude-code --socket \\\\.\\pipe\\atellagent-hook-control", "timeout": 20}]}],
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "python -m atellagent_client.hook_launcher --host claude-code --socket \\\\.\\pipe\\atellagent-hook-control", "timeout": 20}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "python -m atellagent_client.hook_launcher --host claude-code --socket \\\\.\\pipe\\atellagent-hook-control", "timeout": 20}]}],
+    "PostToolUseFailure": [{"hooks": [{"type": "command", "command": "python -m atellagent_client.hook_launcher --host claude-code --socket \\\\.\\pipe\\atellagent-hook-control", "timeout": 20}]}]
+  }
+}
