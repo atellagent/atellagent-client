@@ -8,18 +8,22 @@ from __future__ import annotations
 import asyncio
 import errno
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any, Dict, Mapping
 
+from atellagent_client.hook_limits import MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES
 from atellagent_client.governance import ActionDenied
 from atellagent_client.sdk.errors import PolicyTransportError, PolicyViolationError
 
 
 HOOK_CONTROL_PROTOCOL = "atellagent.hook-control.v1"
-MAX_REQUEST_BYTES = 64 * 1024
-MAX_RESPONSE_BYTES = 1024 * 1024
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$")
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
 
 
 class HookControlError(RuntimeError):
@@ -35,6 +39,9 @@ def _local_transport_error_code(exc: BaseException) -> str:
 
     if isinstance(exc, asyncio.TimeoutError):
         return "control_socket_timeout"
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code.startswith(("control_", "windows_")):
+        return code
     if isinstance(exc, (FileNotFoundError, NotADirectoryError)):
         return "control_socket_missing"
     if isinstance(exc, PermissionError):
@@ -96,31 +103,50 @@ def safe_error_code(exc: Exception, *, default: str = "control_unavailable") -> 
 
 
 class HookControlClient:
-    """Credential-free JSON-lines client for a local hook-control socket."""
+    """Credential-free JSON-lines client for a local hook-control endpoint."""
 
-    def __init__(self, socket_path: str, *, timeout_seconds: float = 5.0) -> None:
-        self.socket_path = str(Path(socket_path).expanduser())
+    def __init__(self, socket_path: str, *, timeout_seconds: float = 19.0) -> None:
+        if _is_windows():
+            from .windows_named_pipe import validate_windows_named_pipe
+
+            self.socket_path = validate_windows_named_pipe(socket_path)
+        else:
+            self.socket_path = str(Path(socket_path).expanduser())
         self.timeout_seconds = max(0.1, float(timeout_seconds))
 
     async def call(self, method: str, params: Mapping[str, Any]) -> Dict[str, Any]:
         request = {"protocol_version": HOOK_CONTROL_PROTOCOL, "id": "hook-request", "method": str(method or "").strip(), "params": dict(params)}
+        frame = json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n"
+        if len(frame) > MAX_REQUEST_BYTES:
+            raise HookControlError("control_request_too_large")
+        writer = None
         try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_unix_connection(
-                    self.socket_path,
-                    # StreamReader defaults to 64 KiB, which is smaller than
-                    # the hook-control protocol's permitted response frame.
-                    limit=MAX_RESPONSE_BYTES + 1,
-                ),
-                timeout=self.timeout_seconds,
-            )
-            writer.write(json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n")
-            await asyncio.wait_for(writer.drain(), timeout=self.timeout_seconds)
-            line = await asyncio.wait_for(reader.readline(), timeout=self.timeout_seconds)
-            writer.close()
-            await writer.wait_closed()
+            # Connection, write and response consume one budget, not a fresh
+            # timeout per operation. The host adapter reserves its own margin.
+            async with asyncio.timeout(self.timeout_seconds):
+                if _is_windows():
+                    from .windows_named_pipe import windows_named_pipe_request
+
+                    line = await windows_named_pipe_request(
+                        self.socket_path, frame, timeout_seconds=self.timeout_seconds
+                    )
+                else:
+                    reader, writer = await asyncio.open_unix_connection(
+                        self.socket_path,
+                        # StreamReader defaults to 64 KiB, which is smaller than
+                        # the hook-control protocol's permitted response frame.
+                        limit=MAX_RESPONSE_BYTES + 1,
+                    )
+                    writer.write(frame)
+                    await writer.drain()
+                    line = await reader.readline()
+                    writer.close()
+                    await writer.wait_closed()
         except Exception as exc:
             raise HookControlError(_local_transport_error_code(exc)) from exc
+        finally:
+            if writer is not None:
+                writer.close()
         if not line or len(line) > MAX_RESPONSE_BYTES:
             raise HookControlError("control_response_invalid")
         try:

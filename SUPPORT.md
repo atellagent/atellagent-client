@@ -28,10 +28,30 @@ modules and managed-service behavior are not public support contracts.
   accepted.
 - A rotation deadline, issuer error, or post-activation reconnect error appears
   in participant logs and the dashboard. Keep staged credentials private and
-  use a new administrator-issued recovery enrollment when the old identity can
-  no longer authenticate.
+  continue the saved request when approval or delivery was interrupted. If the
+  identity can no longer authenticate because its key is lost or its certificate
+  is expired or revoked, ask your administrator to revoke the old identity and
+  approve a replacement through the normal setup flow. Signing in again does not
+  repair machine credentials. See [device recovery](docs/LOCAL_SERVICE.md#remove-local-enrollment-or-recover-a-device).
 - Do not attach YAML containing tokens, certificate/key files, delivery
   capabilities, or customer payloads to support requests.
+
+## Desktop and device troubleshooting
+
+- Pending approval is not a startup failure. Continue the saved request after
+  administrator review; do not submit another identity to restart the wait.
+- Native connection approval and owner consent are separate. A running controller
+  is not proof that the host has loaded its hooks. Review/save the generated hook
+  settings and verify a real governed action in the host.
+- Discovery reads current-user declarations. A detected agent or MCP entry is
+  not proof of a healthy, approved connection. Check reporting freshness in
+  Organization → Discovery and the exact integration in Runtimes & Integrations.
+- Browser logout does not normally stop approved runtimes. Check current
+  membership, revocation, configured authorization expiry and machine credential
+  status before repeating sign-in.
+- Use [the desktop guide](docs/DESKTOP_APP.md) for downloads, MCP setup and manual
+  updates. Report the app version and sanitized diagnostic details, not local
+  credentials or host configuration contents.
 
 ## Portable-image troubleshooting
 

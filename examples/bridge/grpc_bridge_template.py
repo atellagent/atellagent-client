@@ -11,10 +11,11 @@ import asyncio
 import grpc
 
 from atellagent_client.connected import ConnectedBridge, mount_agent_handler
-from atellagent_client.sdk.config import load_service_account_config_from_yaml
+from atellagent_client.examples.workload import load_workload_config, add_workload_options
 
 
-async def run(config_path: str, grpc_target: str) -> None:
+async def run(directory, request_id, grpc_target: str) -> None:
+    config = await load_workload_config(directory, request_id, integration_type="agent", packaging="bridge")
     channel = grpc.aio.insecure_channel(grpc_target)
 
     async def handler(payload: dict) -> dict:
@@ -25,7 +26,7 @@ async def run(config_path: str, grpc_target: str) -> None:
         # gRPC metadata. The target must durably deduplicate that value.
         return {"content": f"replace with gRPC result for {effect_key}"}
 
-    runtime = ConnectedBridge(load_service_account_config_from_yaml(config_path))
+    runtime = ConnectedBridge(config)
     mount_agent_handler(runtime, handler, target_idempotent=True)
     try:
         await runtime.run_forever()
@@ -36,10 +37,10 @@ async def run(config_path: str, grpc_target: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
+    add_workload_options(parser)
     parser.add_argument("--target", required=True, help="For example: 127.0.0.1:50051")
     args = parser.parse_args()
-    asyncio.run(run(args.config, args.target))
+    asyncio.run(run(args.state_directory, args.request_id, args.target))
 
 
 if __name__ == "__main__":

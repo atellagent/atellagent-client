@@ -12,7 +12,6 @@ import stat
 import tempfile
 import unittest
 from unittest.mock import patch
-from uuid import uuid4
 
 from anthropic import AsyncAnthropic
 
@@ -21,32 +20,18 @@ from atellagent_client.integrations.agents.anthropic_facade import (
     load_route_facade_capability_token,
     translate_anthropic_request,
 )
-from atellagent_client.sdk.config_models import SDKDeploymentConfig, ServiceAccountConfig
 from atellagent_client.sdk.errors import PolicyTransportError, PolicyViolationError
 
 
 _TOKEN = "local-capability-token-for-test-only-0001"
 
 
-def _config() -> ServiceAccountConfig:
-    return ServiceAccountConfig(
-        client_id="client-id",
-        gateway_url="https://mtls.gateway.example",
-        oauth_token_url="https://mtls.auth.example/token",
-        oauth_jwks_url="https://mtls.auth.example/jwks",
-        service_account_id=str(uuid4()),
-        integration_id=str(uuid4()),
-        tenant_id=str(uuid4()),
-        capabilities=["agent.control"],
-        cert_path="/tmp/client.crt",
-        key_path="/tmp/client.key",
-        integration_type="agent",
-        identity_mode="boundary_identity_only",
-        deployment=SDKDeploymentConfig(),
-    )
-
+from facade_support import identity
 
 class _Governance:
+    async def close_async(self):
+        pass
+
     def __init__(self) -> None:
         self.calls: list[dict] = []
         self.failure: Exception | None = None
@@ -69,6 +54,9 @@ class _Governance:
 
 class AnthropicFacadeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.config, self.binding = identity(Path(directory.name).resolve())
         self.governance = _Governance()
         self.constructor = patch(
             "atellagent_client.integrations.agents.anthropic_facade.ExternalAgentGovernance",
@@ -77,7 +65,7 @@ class AnthropicFacadeTests(unittest.IsolatedAsyncioTestCase):
         self.constructor.start()
         self.addCleanup(self.constructor.stop)
         self.runtime = AnthropicMessagesFacadeRuntime(
-            _config(), capability_token=_TOKEN, host="127.0.0.1", port=0
+            self.config, native_binding=self.binding, capability_token=_TOKEN, host="127.0.0.1", port=0
         )
         await self.runtime.start()
         self.addAsyncCleanup(self.runtime.stop)
@@ -185,12 +173,13 @@ class AnthropicFacadeTests(unittest.IsolatedAsyncioTestCase):
             translate_anthropic_request({"model": "claude-test", "max_tokens": 1, "messages": [{"role": "user", "content": "hello"}], "thinking": {"type": "enabled"}})
 
     def test_runtime_requires_the_standard_enrolled_loopback_boundary(self) -> None:
-        config = _config()
+        config = self.config
         config.capabilities = ["agent.control", "agent.process"]
         with self.assertRaisesRegex(ValueError, "only the provisioned"):
-            AnthropicMessagesFacadeRuntime(config, capability_token=_TOKEN)
+            AnthropicMessagesFacadeRuntime(config, native_binding=self.binding, capability_token=_TOKEN)
+        config.capabilities = ["agent.control"]
         with self.assertRaisesRegex(ValueError, "loopback"):
-            AnthropicMessagesFacadeRuntime(_config(), capability_token=_TOKEN, host="0.0.0.0")
+            AnthropicMessagesFacadeRuntime(self.runtime.config, native_binding=self.binding, capability_token=_TOKEN, host="0.0.0.0")
 
     def test_token_file_must_be_private_and_local(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

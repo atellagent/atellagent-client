@@ -8,8 +8,13 @@ they do not broaden the coverage of a host or integration surface.
 | I need to… | Start here |
 | --- | --- |
 | Embed governance in Python I own | [SDK](../sdk/README.md) |
+| Connect a LangChain agent through the public SDK | [LangChain example](LANGCHAIN_AGENT.md) |
 | Run an outbound connected participant or private bridge | [Connected runtime](../connected/README.md) |
 | Govern Claude Code or Codex | [External coding hosts](HOST_HOOKS.md) |
+| Install and use the Mac or Windows app | [Desktop app](DESKTOP_APP.md) |
+| Run device reporting and approved connections on macOS, Windows or Linux | [Local device service](LOCAL_SERVICE.md) |
+| Connect an existing local MCP server | [Desktop app](DESKTOP_APP.md#connect-an-existing-mcp-server) and [connected runtime](../connected/README.md) |
+| Inventory local Codex and Claude Code settings without changing them | [Local background service: discovery](LOCAL_SERVICE.md) |
 | Use OpenAI, Google, or Anthropic provider SDKs | [Provider sessions](../integrations/providers/README.md) |
 | Govern a customer-owned tool boundary | [Local governance](../governance/README.md) and [tool boundaries](../pep/README.md) |
 | Use a compatibility MCP proxy | [MCP proxies](../proxy/README.md) |
@@ -38,8 +43,9 @@ decision or enforce an action.
   deployment.
 - [OpenAI Responses route facade](hosts/codex-route-mode.md) documents the
   equivalent non-streaming API subset; it is not a Codex deployment.
-- [Gemini CLI](hosts/gemini-cli.md) supports `BeforeModel` and `BeforeTool`
-  decision-mode hooks; `AfterModel` is not supported.
+- [Gemini CLI](hosts/gemini-cli.md) is a preview adapter, not a supported
+  release host. Its documented `BeforeModel` and `BeforeTool` hook mapping
+  still needs release acceptance.
 - [Claude Cowork](hosts/claude-cowork.md) is not supported.
 
 See [Building custom integrations](BUILDING_CUSTOM_INTEGRATIONS.md) when your

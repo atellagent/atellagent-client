@@ -6,9 +6,8 @@
 from __future__ import annotations
 
 import asyncio
-import os
 
-from atellagent_client.examples import bundled_example_path
+from atellagent_client.examples.workload import load_workload_config, options
 from atellagent_client.connected import (
     ConnectedBridge,
     LocalMCPClient,
@@ -16,31 +15,26 @@ from atellagent_client.connected import (
 )
 from atellagent_client.sdk.config import (
     BridgeDeploymentConfig,
-    load_service_account_config_from_yaml,
 )
 
 
-async def run() -> None:
-    config_path = os.getenv("CONFIG_PATH") or bundled_example_path(
-        "config/tool-proxy.yaml"
-    )
-    config = load_service_account_config_from_yaml(config_path)
+async def run(directory, request_id) -> None:
+    config = await load_workload_config(directory, request_id, integration_type="mcp", packaging="bridge")
     if not isinstance(config.deployment, BridgeDeploymentConfig):
         raise ValueError("Tool Proxy example requires bridge packaging")
     target = LocalMCPClient(config.deployment)
-    runtime = ConnectedBridge(config, mcp_manifest=await target.manifest())
-    mount_mcp_handler(
-        runtime,
-        target.invoke,
-        consequential=True,
-        target_idempotent=True,
-    )
+    runtime = None
     try:
+        runtime = ConnectedBridge(config, mcp_manifest=await target.manifest())
+        mount_mcp_handler(runtime, target.invoke, consequential=True, target_idempotent=True)
         await runtime.run_forever()
     finally:
-        await runtime.stop()
-        await target.close()
+        try:
+            if runtime is not None: await runtime.stop()
+        finally:
+            await target.close()
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    args = options()
+    asyncio.run(run(args.state_directory, args.request_id))

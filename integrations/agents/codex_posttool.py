@@ -23,15 +23,19 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Relay one Codex PostToolUse event to the normal hook adapter."""
 
     parser = argparse.ArgumentParser(description="Atellagent Codex post-tool adapter")
-    parser.add_argument("--socket", required=True, help="absolute local hook-control socket")
+    parser.add_argument(
+        "--socket",
+        required=True,
+        help="absolute Unix socket path or local Windows named-pipe endpoint",
+    )
     args = parser.parse_args(argv)
     payload = sys.stdin.buffer.read()
     try:
         completed = subprocess.run(
             [
                 sys.executable,
-                "-m",
-                "atellagent_client.integrations.agents.host_hooks",
+                "-c",
+                "from atellagent_client.integrations.agents.host_hooks import main; main()",
                 "--host",
                 "codex",
                 "--socket",

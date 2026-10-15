@@ -12,6 +12,7 @@ import httpx
 from atellagent_client.protocol.context import apply_workflow_headers, get_workflow_context
 from .config import ServiceAccountConfig
 from .gateway.session import GatewaySession
+from .gateway.device_proof import DeviceProofProvider
 
 
 @dataclass
@@ -77,6 +78,7 @@ def make_authenticated_telemetry_emitter(
     config: ServiceAccountConfig,
     *,
     telemetry_url_override: Optional[str] = None,
+    device_proof_provider: DeviceProofProvider | None = None,
 ) -> TelemetryEmitter:
     """
     Build a telemetry emitter that reuses service-account auth + mTLS settings.
@@ -86,7 +88,8 @@ def make_authenticated_telemetry_emitter(
     if not telemetry_url:
         return lambda event: None
 
-    gateway_session = GatewaySession.from_service_account_config(config)
+    gateway_session = GatewaySession.from_service_account_config(config,
+        device_proof_provider=device_proof_provider)
 
     def _emit(event: TelemetryEvent) -> None:
         try:

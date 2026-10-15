@@ -3,6 +3,6 @@
 
 """Single authoritative version for the public client package."""
 
-CLIENT_LIBRARY_VERSION = "0.9.0"
+CLIENT_LIBRARY_VERSION = "0.9.1"
 
 __all__ = ["CLIENT_LIBRARY_VERSION"]

@@ -17,10 +17,12 @@ import time
 from typing import Any, Mapping, Optional, Sequence
 from uuid import uuid4
 
-from atellagent_client.sdk.config import ServiceAccountConfig, load_service_account_config_from_yaml
+from atellagent_client.sdk.config import ServiceAccountConfig
 from atellagent_client.sdk.errors import PolicyTransportError, PolicyViolationError
+from atellagent_client.onboarding.errors import OnboardingClientError
 
 from .anthropic_facade import AnthropicMessagesFacadeRuntime, load_route_facade_capability_token
+from .facade_cli import add_request_option, run_facade
 
 
 _SUPPORTED_FIELDS = {
@@ -309,23 +311,13 @@ class OpenAIResponsesFacadeRuntime(AnthropicMessagesFacadeRuntime):
 
 
 async def _run_cli(args: argparse.Namespace) -> None:
-    host, port = args.listen.rsplit(":", 1)
-    runtime = OpenAIResponsesFacadeRuntime(
-        load_service_account_config_from_yaml(args.config),
-        capability_token=load_route_facade_capability_token(args.token_file), host=host, port=int(port),
-    )
-    await runtime.start()
-    address = runtime.address
-    print(f"OpenAI Responses route facade listening on http://{address[0]}:{address[1]}")
-    try:
-        await runtime.run_forever()
-    finally:
-        await runtime.stop()
+    await run_facade(args, OpenAIResponsesFacadeRuntime, "OpenAI Responses",
+                     load_route_facade_capability_token)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run an Atellagent loopback OpenAI Responses route facade.")
-    parser.add_argument("config", help="Path to the enrolled connected agent YAML")
+    add_request_option(parser)
     parser.add_argument("--token-file", required=True, help="Absolute owner-only local capability-token file")
     parser.add_argument("--listen", default="127.0.0.1:8788", help="Loopback HOST:PORT")
     args = parser.parse_args(argv)
@@ -335,6 +327,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         return
     except ValueError as exc:
         parser.error(str(exc))
+    except OnboardingClientError as exc:
+        parser.exit(1, f"[ERROR] {exc.code}\n")
 
 
 __all__ = [

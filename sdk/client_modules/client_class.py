@@ -17,6 +17,7 @@ from atellagent_client.protocol.context import (
 )
 from atellagent_client.sdk.config import ServiceAccountConfig
 from atellagent_client.sdk.gateway.session import GatewaySession
+from atellagent_client.sdk.gateway.device_proof import DeviceProofProvider
 from ..operations import APIOperations
 from atellagent_client.sdk.telemetry import TelemetryEmitter
 from .agent_events import AgentEventsClientMixin
@@ -69,12 +70,13 @@ class AtellagentClient(
         telemetry_emitter: Optional[TelemetryEmitter] = None,
         integration_type: Optional[str] = None,
         service_account_id: Optional[str] = None,
+        device_proof_provider: DeviceProofProvider | None = None,
     ):
         """Initialize client with service account configuration."""
 
         self.service_account_config = service_account_config
         self.gateway_session = GatewaySession.from_service_account_config(
-            service_account_config
+            service_account_config, device_proof_provider=device_proof_provider
         )
         self.auth_manager = self.gateway_session.auth_manager
         self.telemetry_emitter = telemetry_emitter

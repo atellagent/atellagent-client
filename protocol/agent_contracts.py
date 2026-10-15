@@ -95,6 +95,7 @@ class GovernanceReceipt:
     control_directive: Optional[str] = None
     directive_expires_at: Optional[str] = None
     action_binding_fingerprint: Optional[str] = None
+    assessment_reference: Optional[str] = None
 
     @property
     def is_executable(self) -> bool:
