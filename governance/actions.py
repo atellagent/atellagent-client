@@ -18,7 +18,6 @@ from atellagent_client.pep import (
     evaluate_controlled_action,
     load_local_guardrail_manifest,
 )
-from atellagent_client.sdk.config import load_service_account_config_from_yaml
 
 
 class ActionDenied(PermissionError):
@@ -27,6 +26,10 @@ class ActionDenied(PermissionError):
     def __init__(self, reason_code: str) -> None:
         self.reason_code = str(reason_code or "remote_action_denied")
         super().__init__(self.reason_code)
+
+
+class PolicyActionDenied(ActionDenied):
+    """A covered control decision refused an action after verification."""
 
 
 def _text(value: Any) -> str:
@@ -46,11 +49,6 @@ class RuntimeActionGate:
     source: str
     directive_verifier: Optional[Any] = None
     local_manifest: Optional[LocalGuardrailManifest] = None
-
-    @classmethod
-    def from_config_path(cls, config_path: str) -> "RuntimeActionGate":
-        config = load_service_account_config_from_yaml(config_path)
-        return cls.from_config(config)
 
     @classmethod
     def from_config(cls, config: Any) -> "RuntimeActionGate":
@@ -99,6 +97,7 @@ class RuntimeActionGate:
         correlation_id: str,
         encoded_directive: Optional[str] = None,
         facts: Optional[Mapping[str, Any]] = None,
+        raw_context: Optional[Mapping[str, Any]] = None,
         workflow_context: Optional[Mapping[str, Any]] = None,
         policy_decision_id: Optional[str] = None,
     ) -> None:
@@ -116,6 +115,7 @@ class RuntimeActionGate:
             ),
             correlation_id=normalized_correlation_id,
             facts=dict(facts or {}),
+            raw_context=dict(raw_context or {}),
             tenant_id=_context_value(workflow_context, "tenant_id"),
             execution_id=_context_value(workflow_context, "execution_id"),
             workspace_id=_context_value(workflow_context, "workspace_id"),
@@ -142,9 +142,8 @@ class RuntimeActionGate:
         except Exception as exc:
             raise ActionDenied(str(exc) or "control_unavailable") from exc
         if decision.decision != "allow":
-            raise ActionDenied(
-                decision.reason_code or "remote_action_denied"
-            )
+            failure_type = PolicyActionDenied if decision.coverage == "covered" else ActionDenied
+            raise failure_type(decision.reason_code or "remote_action_denied")
 
 
 class _VerifiedDirectiveAdapter:
@@ -159,4 +158,4 @@ class _VerifiedDirectiveAdapter:
         return self._directive
 
 
-__all__ = ["ActionDenied", "RuntimeActionGate"]
+__all__ = ["ActionDenied", "PolicyActionDenied", "RuntimeActionGate"]

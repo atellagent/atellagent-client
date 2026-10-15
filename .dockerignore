@@ -8,5 +8,7 @@
 !dist/atellagent_client-*.whl
 !requirements/
 !requirements/container-core-py311.lock
+!security/
+!security/native_components.py
 !LICENSE.md
 !THIRD_PARTY_NOTICES.md

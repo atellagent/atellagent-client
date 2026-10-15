@@ -9,7 +9,8 @@ not an MCP server merely because it governs tool actions.
 ## Host hook control
 
 `HookControlRuntime` runs an enrolled `agent.control` boundary on an owner-only
-Unix socket. `atellagent-hook-adapter` is credential-free and translates Claude
+Unix socket (macOS/Linux) or a current-user ACL-protected named pipe (Windows).
+`atellagent-hook-adapter` is credential-free and translates Claude
 Code or Codex command-hook JSON to that socket. Standard host hooks use
 `boundary_identity_only` and provide `turn_entry` model decisions plus tool
 preflight/postflight, not `full_model_request` observation.
@@ -28,7 +29,7 @@ atellagent-cli ./hook-control.yaml \
 
 For a local Codex MCP bridge, run
 `atellagent-mcp-bridge --config ./bridge.yaml`. That file contains the same
-absolute socket path. The stdio bridge is credential-free; this runtime uses its
+absolute local endpoint. The stdio bridge is credential-free; this runtime uses its
 enrolled service-account session to fetch the assigned tool catalog. Start from
 [`examples/config/local-mcp-bridge.yaml`](../../examples/config/local-mcp-bridge.yaml),
 not `tool-proxy.yaml`, which is for a separately enrolled customer-MCP boundary.
@@ -55,3 +56,24 @@ must not depend on underscored modules or inject an unverified principal ID.
 
 This package does not implement a provider route facade, a workflow engine, or
 the actual MCP tool effect boundary.
+
+
+The packaged command-hook entrypoint now uses the stdlib-only
+`atellagent_client.hook_launcher` to relay exact stdin bytes to the ordinary
+adapter in a bounded child process. Startup/import errors and unexpected child
+exit codes become the documented blocking exit 2 instead of a nonblocking
+host error. Healthy adapter output, including JSON policy denials, remains
+unchanged; ordinary blocking errors retain their sign-in/transport reason.
+Exact Codex `update_goal` blocked/paused/complete calls can recover when the
+child is unavailable, while healthy policy denials still apply. This does not
+make Claude Stop a governed task-completion action.
+
+User hook templates call the guard as a Python module, avoiding a dependency
+on a separately modified adapter console script. Use the Python interpreter
+from the installed Atellagent environment. The managed Codex template retains
+its administrator-owned executable path; that packaged executable resolves to
+the guarded entrypoint after client installation. Installed hook commands are
+not rewritten by a source edit. Missing interpreters, tampered launchers, and
+disabled hooks remain outside the cooperative command boundary; do not claim
+protected execution against those cases. No controller restart is needed for
+a freshly installed command adapter, because hosts launch it per event.

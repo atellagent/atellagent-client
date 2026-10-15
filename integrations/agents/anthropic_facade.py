@@ -20,11 +20,15 @@ import stat
 from typing import Any, Mapping, Optional, Sequence
 from uuid import uuid4
 
-from atellagent_client.sdk.config import ServiceAccountConfig, load_service_account_config_from_yaml
+from atellagent_client.sdk.config import ServiceAccountConfig
 from atellagent_client.sdk.errors import PolicyTransportError, PolicyViolationError
+from atellagent_client.onboarding.native_runtime_binding import NativeRuntimeBinding
+from atellagent_client.onboarding.native_runtime_identity import require_native_runtime_identity
+from atellagent_client.onboarding.errors import OnboardingClientError
 
 from .control import ExternalAgentGovernance
 from .identity_mode import BOUNDARY_IDENTITY_ONLY
+from .facade_cli import add_request_option, run_facade
 
 
 _MAX_HEADER_BYTES = 32 * 1024
@@ -291,11 +295,13 @@ def load_route_facade_capability_token(path: str) -> str:
 class AnthropicMessagesFacadeRuntime:
     """Serve supported Messages requests on an enrolled loopback boundary."""
 
-    def __init__(self, config: ServiceAccountConfig, *, capability_token: str, host: str = "127.0.0.1", port: int = 8787) -> None:
+    def __init__(self, config: ServiceAccountConfig, *, native_binding: NativeRuntimeBinding,
+                 capability_token: str, host: str = "127.0.0.1", port: int = 8787) -> None:
         if config.integration_type != "agent" or config.identity_mode != BOUNDARY_IDENTITY_ONLY:
             raise ValueError("Anthropic route facade requires a boundary-only connected agent")
         if set(config.capabilities) != {_CONTROL_CAPABILITY}:
             raise ValueError("Anthropic route facade requires only the provisioned agent.control capability")
+        require_native_runtime_identity(config, native_binding)
         if host not in _LOCAL_HOSTS:
             raise ValueError("Anthropic route facade host must be a loopback address")
         if not isinstance(port, int) or not 0 <= port <= 65535:
@@ -306,7 +312,7 @@ class AnthropicMessagesFacadeRuntime:
         self.host = host
         self.port = port
         self._capability_token = capability_token
-        self.governance = ExternalAgentGovernance(config)
+        self.governance = ExternalAgentGovernance(config, device_proof_provider=native_binding.request_headers)
         self._server: Optional[asyncio.AbstractServer] = None
         self._stop_event = asyncio.Event()
 
@@ -336,6 +342,7 @@ class AnthropicMessagesFacadeRuntime:
         if server is not None:
             server.close()
             await server.wait_closed()
+        await self.governance.close_async()
 
     def _authorized(self, headers: Mapping[str, str]) -> bool:
         supplied: list[str] = []
@@ -445,36 +452,14 @@ class AnthropicMessagesFacadeRuntime:
         return method, target, headers, payload
 
 
-def _listen_address(value: str) -> tuple[str, int]:
-    host, separator, port = str(value or "").rpartition(":")
-    if not separator or not host:
-        raise ValueError("--listen must use HOST:PORT")
-    try:
-        return host, int(port)
-    except ValueError as exc:
-        raise ValueError("--listen port must be an integer") from exc
-
-
 async def _run_cli(args: argparse.Namespace) -> None:
-    host, port = _listen_address(args.listen)
-    runtime = AnthropicMessagesFacadeRuntime(
-        load_service_account_config_from_yaml(args.config),
-        capability_token=load_route_facade_capability_token(args.token_file),
-        host=host,
-        port=port,
-    )
-    await runtime.start()
-    address = runtime.address
-    print(f"Anthropic Messages route facade listening on http://{address[0]}:{address[1]}")
-    try:
-        await runtime.run_forever()
-    finally:
-        await runtime.stop()
+    await run_facade(args, AnthropicMessagesFacadeRuntime, "Anthropic Messages",
+                     load_route_facade_capability_token)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run an Atellagent loopback Anthropic Messages route facade.")
-    parser.add_argument("config", help="Path to the enrolled connected agent YAML")
+    add_request_option(parser)
     parser.add_argument("--token-file", required=True, help="Absolute owner-only local capability-token file")
     parser.add_argument("--listen", default="127.0.0.1:8787", help="Loopback HOST:PORT")
     args = parser.parse_args(argv)
@@ -484,6 +469,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         return
     except ValueError as exc:
         parser.error(str(exc))
+    except OnboardingClientError as exc:
+        parser.exit(1, f"[ERROR] {exc.code}\n")
 
 
 __all__ = [

@@ -17,44 +17,64 @@ ghcr.io/atellagent/atellagent-client@sha256:<manifest-digest>
 
 Verify it before deployment with `docker buildx imagetools inspect
 ghcr.io/atellagent/atellagent-client@sha256:<manifest-digest>`. The protected
-release workflow attaches provenance and an SPDX SBOM to that manifest.
+release workflow attaches provenance and an SPDX SBOM to that manifest. The
+native-component supplement at `/licenses/native-components.spdx.json` records
+cryptography’s embedded OpenSSL from the installed library and is scanned and
+retained as a separate CI artifact for each architecture.
 
-## One-shot enrollment, then runtime
+## Request approval, then run
 
-Keep generated configuration read-only and use a dedicated writable identity
-volume. Enrollment is a separate, one-shot invocation:
+Use a dedicated writable identity volume. Setup prints a browser link and code;
+complete sign-in on this or another device, select your organization, and have
+an administrator approve the exact workload request. No downloaded YAML or
+copied enrollment token is required.
+
+An empty Docker named volume inherits the image directory's owner and private
+permissions. For an existing volume or bind mount, prepare it for UID/GID
+`10001:10001` with owner-only access before setup.
+
+The scratch tmpfs must also use UID/GID `10001:10001` and mode `700` so
+the nonroot participant can create temporary files with private access.
 
 ```bash
 docker volume create atellagent-identity
 docker run --rm -it --user 10001:10001 \
-  --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m \
-  -v "$PWD/config:/config:ro" \
+  --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m,uid=10001,gid=10001,mode=700 \
+  --cap-drop ALL --security-opt no-new-privileges \
   -v atellagent-identity:/var/lib/atellagent/identity \
-  -e ATELLAGENT_CERT_PATH=/var/lib/atellagent/identity/client-cert.pem \
-  -e ATELLAGENT_KEY_PATH=/var/lib/atellagent/identity/client-key.pem \
   ghcr.io/atellagent/atellagent-client@sha256:<manifest-digest> \
-  /config/integration.yaml --enroll
+  workload request --state-directory /var/lib/atellagent/identity/workload \
+  --platform-url https://atellagent.com --name customer-agent \
+  --type agent --packaging sdk --capability agent.execute \
+  --identity-mode boundary_identity_only \
+  --handler customer_runtime:handler --target-idempotent
 ```
+
+Keep the printed request UUID. If approval is still pending when setup returns,
+run the same container with `workload resume <request-uuid> --state-directory
+/var/lib/atellagent/identity/workload`. The saved request and locally generated
+keys are reused; this does not submit a new request. Start the runtime only after
+activation succeeds. Use `--target-idempotent` only when your handler actually
+honors delivery idempotency keys.
 
 The core image deliberately has no customer handler. Run a connected participant
 from a pinned derived image or a read-only customer-code mount:
 
 ```bash
 docker run --rm --user 10001:10001 \
-  --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+  --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m,uid=10001,gid=10001,mode=700 \
   --cap-drop ALL --security-opt no-new-privileges \
-  -v "$PWD/config:/config:ro" \
   -v atellagent-identity:/var/lib/atellagent/identity \
   -v "$PWD/customer:/customer:ro" -e PYTHONPATH=/customer \
-  -e ATELLAGENT_CERT_PATH=/var/lib/atellagent/identity/client-cert.pem \
-  -e ATELLAGENT_KEY_PATH=/var/lib/atellagent/identity/client-key.pem \
   ghcr.io/atellagent/atellagent-client@sha256:<manifest-digest> \
-  /config/integration.yaml --handler customer_runtime:handler --target-idempotent
+  workload run <request-uuid> \
+  --state-directory /var/lib/atellagent/identity/workload
 ```
 
-The identity volume is writable because normal certificate rotation replaces the
-certificate and private key atomically. Never bake those files, an enrollment
-token, or provider credentials into an image or build input.
+The identity volume holds private keys, approved configuration and setup
+progress. Preserve it across container replacement; never bake its contents or
+provider credentials into an image or build input. Ordinary workload execution
+uses its approved machine identity, not the setup user's browser session.
 
 ## Derived images
 
@@ -72,7 +92,7 @@ USER 10001:10001
 ```
 
 Build and scan a derived image in the customer's release process. Its
-configuration and identity mounts stay separate from the image.
+identity and customer settings stay separate from the image.
 
 ## Compose and Kubernetes hardening
 
@@ -84,16 +104,13 @@ services:
     read_only: true
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
-    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m,uid=10001,gid=10001,mode=700"]
     volumes:
-      - ./config:/config:ro
       - atellagent-identity:/var/lib/atellagent/identity
       - ./customer:/customer:ro
     environment:
       PYTHONPATH: /customer
-      ATELLAGENT_CERT_PATH: /var/lib/atellagent/identity/client-cert.pem
-      ATELLAGENT_KEY_PATH: /var/lib/atellagent/identity/client-key.pem
-    command: [/config/integration.yaml, --handler, customer_runtime:handler, --target-idempotent]
+    command: [workload, run, "<request-uuid>", --state-directory, /var/lib/atellagent/identity/workload]
 volumes:
   atellagent-identity: {}
 ```
@@ -101,7 +118,7 @@ volumes:
 For Kubernetes, use `runAsUser`, `runAsGroup`, and `fsGroup` `10001`, a
 read-only root filesystem, dropped capabilities, no privilege escalation, a
 writable `emptyDir` for `/tmp`, and a dedicated writable identity volume. Mount
-configuration and customer code read-only. This participant needs no Service
+customer settings and code read-only. This participant needs no Service
 unless a customer adapter separately adds and secures an inbound surface.
 
 ## Updates, rollback, hooks, and release administration

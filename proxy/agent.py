@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 import logging
 from dataclasses import dataclass
 from secrets import token_urlsafe
@@ -111,9 +112,12 @@ def _requested_protocol(document: Mapping[str, Any], headers: Mapping[str, str] 
     method = str(document.get("method") or "")
     params = document.get("params") if isinstance(document.get("params"), Mapping) else {}
     if method == "initialize":
-        declared = str(params.get("protocolVersion") or "").strip()
-        if declared not in LEGACY_MCP_PROTOCOL_VERSIONS:
-            raise MCPAgentProxyError("legacy initialize request has an unsupported protocol version")
+        declared = params.get("protocolVersion")
+        try:
+            if not isinstance(declared, str) or date.fromisoformat(declared).isoformat() != declared:
+                raise ValueError("canonical date revision required")
+        except (ValueError, TypeError):
+            raise MCPAgentProxyError("legacy initialize request has an invalid protocol version") from None
         if header and header != declared:
             raise MCPAgentProxyError("MCP protocol header and initialize request disagree")
         return MCPPeerProtocol.LEGACY_STREAMABLE_HTTP
@@ -150,7 +154,7 @@ class MCPAgentProxy:
             ttl_seconds=legacy_session_ttl_seconds,
             max_sessions=legacy_max_sessions,
         )
-        self._stdio_legacy_session_id: str | None = None
+        self._stdio_protocol_version: str | None = None
 
     async def handle(
         self,
@@ -169,10 +173,25 @@ class MCPAgentProxy:
             if header_version and header_version != session.protocol_version:
                 raise MCPAgentProxyError("MCP legacy session protocol changed")
 
+        return await self._handle_negotiated(document, protocol, session_id)
+
+    async def _handle_negotiated(
+        self,
+        document: Mapping[str, Any],
+        protocol: MCPPeerProtocol,
+        session_id: str | None,
+        *,
+        stdio: bool = False,
+    ) -> ProxyResponse:
+        method = str(document["method"])
         if method == "initialize":
             params = document.get("params") if isinstance(document.get("params"), Mapping) else {}
-            version = str(params.get("protocolVersion") or "")
-            created = self._legacy_sessions.create(version)
+            requested = str(params.get("protocolVersion") or "")
+            # initialize establishes the handshake era, even when the client
+            # asks for an unknown/newer revision. Offer a supported version;
+            # never echo an unsupported version into the negotiated session.
+            version = requested if requested in LEGACY_MCP_PROTOCOL_VERSIONS else max(LEGACY_MCP_PROTOCOL_VERSIONS)
+            created = None if stdio else self._legacy_sessions.create(version)
             logger.info("MCP compatibility peer negotiated legacy revision %s", version)
             return ProxyResponse(
                 protocol=protocol,
@@ -239,21 +258,33 @@ class MCPAgentProxy:
         return ProxyResponse(protocol=protocol, document=_error(document, "MCP method is unsupported", code=-32601))
 
     async def handle_json_line(self, line: str) -> str | None:
-        """Handle one stdio JSON-RPC line for the bundled agent-proxy CLI."""
+        """Keep negotiation for this pipe's lifetime; correlate request errors."""
         try:
             document = json.loads(line)
-        except json.JSONDecodeError as error:
-            raise MCPAgentProxyError("MCP stdio input is not JSON") from error
+        except json.JSONDecodeError:
+            return json.dumps(_error({}, "MCP stdio input is not JSON", code=-32700))
         if not isinstance(document, Mapping):
-            raise MCPAgentProxyError("MCP stdio input must be an object")
-        headers = (
-            {_SESSION_HEADER: self._stdio_legacy_session_id}
-            if self._stdio_legacy_session_id
-            else None
-        )
-        response = await self.handle(document, headers=headers)
-        if response.protocol is MCPPeerProtocol.LEGACY_STREAMABLE_HTTP and response.session_id:
-            self._stdio_legacy_session_id = response.session_id
+            return json.dumps(_error({}, "MCP stdio input must be an object"))
+        try:
+            if document.get("jsonrpc") != "2.0" or not isinstance(document.get("method"), str):
+                raise MCPAgentProxyError("MCP request must be a JSON-RPC method object")
+            headers = (
+                {_PROTOCOL_HEADER: self._stdio_protocol_version}
+                if self._stdio_protocol_version else None
+            )
+            protocol = _requested_protocol(document, headers)
+            response = await self._handle_negotiated(document, protocol, None, stdio=True)
+            if document["method"] == "initialize":
+                self._stdio_protocol_version = str(response.document["result"]["protocolVersion"])
+            elif document["method"] == "server/discover":
+                self._stdio_protocol_version = MODERN_MCP_PROTOCOL_VERSION
+        except Exception as error:
+            if "id" not in document:
+                return None
+            code = -32600 if isinstance(error, MCPAgentProxyError) else -32000
+            return json.dumps(_error(document, _safe_invocation_error(error), code=code))
+        if "id" not in document:
+            return None
         return json.dumps(response.document, separators=(",", ":")) if response.document is not None else None
 
 

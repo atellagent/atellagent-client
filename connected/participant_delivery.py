@@ -14,6 +14,7 @@ from typing import Any
 from .actions import ConnectedActionClient, _DeliveryActionContext
 from .contracts import ConnectedHandlerResult, ConnectedMessage, ConnectedProtocolError
 from .participant_protocol import strict_object
+from .result_budget import build_result_commit_payload
 
 
 logger = logging.getLogger(__name__)
@@ -87,18 +88,12 @@ class ConnectedDeliveryMixin:
     async def _commit_result(
         self, message: ConnectedMessage, result: ConnectedHandlerResult
     ) -> None:
+        commit_payload = build_result_commit_payload(message, result)
         response = await self._request(
             "POST",
             self.config.result_path_template,
             message=message,
-            json={
-                "lease_id": message.lease.lease_id,
-                "lease_token": message.lease.lease_token,
-                "terminal_status": result.terminal_status,
-                "result_schema": result.result_schema,
-                "result_payload": result.result_payload,
-                "evidence_payload": result.evidence_payload,
-            },
+            json=commit_payload,
         )
         payload = strict_object(
             response.json(),
@@ -107,7 +102,7 @@ class ConnectedDeliveryMixin:
         )
         if (
             str(payload.get("message_id")) != message.message_id
-            or payload.get("terminal_status") != result.terminal_status
+            or payload.get("terminal_status") != commit_payload["terminal_status"]
         ):
             raise ConnectedProtocolError("result response binding mismatch")
 

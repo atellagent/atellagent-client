@@ -114,7 +114,8 @@ class LocalMCPClientTests(unittest.IsolatedAsyncioTestCase):
                 "supportedVersions": ["2026-07-28"],
                 "cacheScope": "private",
                 "ttlMs": 0,
-                "capabilities": {},
+                "capabilities": {"experimental": {"atellagent/durableIdempotency": {
+                    "key": "atellagent/idempotencyKey", "durable": True}}},
             }
         )
         with self.assertRaisesRegex(ValueError, "does not support"):
@@ -135,6 +136,12 @@ class LocalMCPClientTests(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaisesRegex(ValueError, "loopback"):
             _require_loopback_url("https://mcp.example.com/mcp")
+
+    def test_target_must_advertise_durable_idempotency_not_just_local_checkbox(self) -> None:
+        discovery = {"resultType": "complete", "supportedVersions": ["2026-07-28"],
+                     "cacheScope": "private", "ttlMs": 0, "capabilities": {"tools": {}}}
+        with self.assertRaisesRegex(ValueError, "durable delivery idempotency"):
+            _validate_discovery(discovery)
 
     def test_http_auth_is_loaded_only_from_environment(self) -> None:
         target = LocalMCPClient(

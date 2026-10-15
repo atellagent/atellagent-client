@@ -53,13 +53,12 @@ class ServiceAccountConfig:
 
     client_id: str
     gateway_url: str
+    platform_origin: str
     oauth_token_url: Optional[str] = None
     oauth_jwks_url: Optional[str] = None
     service_account_id: Optional[str] = None  # required immutable id from backend
     integration_id: Optional[str] = None
-    tenant_id: Optional[str] = (
-        None  # required only while constructing an enrollment CSR
-    )
+    tenant_id: Optional[str] = None  # immutable tenant identity from managed setup
     placement: str = "connected"
     protocol_version: str = "v1"
     capabilities: List[str] = field(default_factory=list)
@@ -84,6 +83,10 @@ class ServiceAccountConfig:
         "/v1/connected-runtimes/instances/{instance_id}/messages/"
         "{message_id}/leases/{lease_id}/actions/mcp"
     )
+    model_action_path_template: str = (
+        "/v1/connected-runtimes/instances/{instance_id}/messages/"
+        "{message_id}/leases/{lease_id}/actions/model"
+    )
     heartbeat_path_template: str = (
         "/v1/connected-runtimes/instances/{instance_id}/heartbeat"
     )
@@ -105,8 +108,6 @@ class ServiceAccountConfig:
         "{operation_id}/activate"
     )
     mcp_descriptor_path_template: Optional[str] = None
-    certificate_enrollment_url: Optional[str] = None
-    certificate_enrollment_expires_at: Optional[str] = None
     telemetry_url: Optional[str] = None  # optional telemetry ingestion endpoint
     api_version: str = DEFAULT_API_VERSION
     contract_version: str = DEFAULT_CONTRACT_VERSION
@@ -128,9 +129,12 @@ class ServiceAccountConfig:
     channel_adapter_key: Optional[str] = None
     channel_ingress_enabled: bool = True
     channel_egress_enabled: bool = True
+    native_host: Optional[str] = None
     deployment: DeploymentConfig = field(default_factory=SDKDeploymentConfig)
 
     def __post_init__(self):
+        from atellagent_client.onboarding.bootstrap_origin import bootstrap_origin
+        self.platform_origin = bootstrap_origin(self.platform_origin)
         self.api_version = normalize_api_version(self.api_version)
         self.contract_version = normalize_contract_version(self.contract_version)
         has_paths = self.cert_path and self.key_path
@@ -159,6 +163,7 @@ class ServiceAccountConfig:
             "lease_renewal_path_template": self.lease_renewal_path_template,
             "result_path_template": self.result_path_template,
             "mcp_action_path_template": self.mcp_action_path_template,
+            "model_action_path_template": self.model_action_path_template,
             "heartbeat_path_template": self.heartbeat_path_template,
             "drain_path_template": self.drain_path_template,
             "deregistration_path_template": self.deregistration_path_template,

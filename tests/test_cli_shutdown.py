@@ -11,7 +11,7 @@ import signal
 import unittest
 from unittest.mock import patch
 
-cli_main = importlib.import_module("atellagent_client.cli.main")
+shutdown = importlib.import_module("atellagent_client.cli.shutdown")
 
 
 class _SignalLoop:
@@ -30,8 +30,8 @@ class _SignalLoop:
 class CliShutdownTests(unittest.IsolatedAsyncioTestCase):
     async def test_sigterm_unblocks_and_removes_handlers(self) -> None:
         loop = _SignalLoop()
-        with patch.object(cli_main.asyncio, "get_running_loop", return_value=loop):
-            task = asyncio.create_task(cli_main._wait_for_shutdown_signal())
+        with patch.object(shutdown.asyncio, "get_running_loop", return_value=loop):
+            task = asyncio.create_task(shutdown.wait_for_shutdown_signal())
             await asyncio.sleep(0)
             callback = loop.handlers[signal.SIGTERM]
             self.assertTrue(callable(callback))

@@ -25,6 +25,7 @@ from .contracts import (
     receipt_from_preflight_response,
 )
 from .identity_mode import FEDERATED_AGENT_IDENTITY
+from .control_gateway_errors import ControlAdmissionError, raise_control_response_error
 
 _BOOTSTRAP_PATH = "/agents/bootstrap-principal"
 _PREFLIGHT_PATH = "/agents/boundary/preflight"
@@ -42,15 +43,17 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
 def _policy_gate_error(payload: Dict[str, Any]) -> PolicyViolationError:
     decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
     outcome = _normalize_optional_text(decision.get("outcome"))
+    code = outcome or "remote_control_denied"
+    if outcome == "technical_hold" and decision.get("violation_type") == "semantic_action_review_timeout":
+        code = "semantic_action_review_timeout"
     message = _normalize_optional_text(decision.get("reason")) or "Action blocked by remote control service"
     detail: Dict[str, Any] = {}
     if payload.get("action_key"):
         detail["action_key"] = payload.get("action_key")
-    return PolicyViolationError(
-        message,
-        outcome or "remote_control_denied",
-        detail,
-    )
+    # A technical hold means the safety dependency could not finish evaluation;
+    # deny/approval outcomes remain authored policy refusals, regardless of reason.
+    failure_type = ControlAdmissionError if outcome == "technical_hold" else PolicyViolationError
+    return failure_type(message, code, detail)
 
 
 def bootstrap_sync(
@@ -65,7 +68,7 @@ def bootstrap_sync(
     )
     payload = response.json() if response.content else {}
     if response.status_code >= 400:
-        governance._raise_gateway_error(response.status_code, payload)
+        raise_control_response_error(governance, response, payload)
     return BoundaryBootstrapResponse.from_payload(payload)
 
 
@@ -81,7 +84,7 @@ async def bootstrap_async(
     )
     payload = response.json() if response.content else {}
     if response.status_code >= 400:
-        governance._raise_gateway_error(response.status_code, payload)
+        raise_control_response_error(governance, response, payload)
     return BoundaryBootstrapResponse.from_payload(payload)
 
 
@@ -114,7 +117,7 @@ def preflight_sync(governance: Any, context: GovernanceCallContext) -> Governanc
     )
     payload = response.json() if response.content else {}
     if response.status_code >= 400:
-        governance._raise_gateway_error(response.status_code, payload)
+        raise_control_response_error(governance, response, payload)
     if isinstance(payload, dict) and payload.get("success") is False:
         raise _policy_gate_error(payload)
     return receipt_from_preflight_response(
@@ -154,7 +157,7 @@ async def preflight_async(governance: Any, context: GovernanceCallContext) -> Go
     )
     payload = response.json() if response.content else {}
     if response.status_code >= 400:
-        governance._raise_gateway_error(response.status_code, payload)
+        raise_control_response_error(governance, response, payload)
     if isinstance(payload, dict) and payload.get("success") is False:
         raise _policy_gate_error(payload)
     return receipt_from_preflight_response(
@@ -181,6 +184,7 @@ def postflight_sync(
         "POST",
         f"{governance.gateway_session.base_url}{build_versioned_route(governance.config.api_version, _POSTFLIGHT_PATH)}",
         workflow_context=receipt.workflow_context,
+        require_local_user_authorization=False,
         json=build_postflight_payload(
             context=context,
             receipt=receipt,
@@ -194,7 +198,7 @@ def postflight_sync(
     )
     payload = response.json() if response.content else {}
     if response.status_code >= 400:
-        governance._raise_gateway_error(response.status_code, payload)
+        raise_control_response_error(governance, response, payload)
 
 
 async def postflight_async(
@@ -226,7 +230,7 @@ async def postflight_async(
     )
     payload = response.json() if response.content else {}
     if response.status_code >= 400:
-        governance._raise_gateway_error(response.status_code, payload)
+        raise_control_response_error(governance, response, payload)
 
 
 async def native_hook_outcome_async(
@@ -251,6 +255,7 @@ async def native_hook_outcome_async(
         "POST",
         f"{governance.gateway_session.base_url}{build_versioned_route(governance.config.api_version, _NATIVE_HOOK_OUTCOME_PATH)}",
         workflow_context={},
+        require_local_user_authorization=False,
         json={
             "action_key": action_key,
             "action_binding_fingerprint": action_binding_fingerprint,
@@ -263,7 +268,11 @@ async def native_hook_outcome_async(
     )
     payload = response.json() if response.content else {}
     if response.status_code >= 400:
-        governance._raise_gateway_error(response.status_code, payload)
+        raise_control_response_error(governance, response, payload)
+
+    if (response.status_code != 200 or not isinstance(payload, dict)
+            or payload.get("success") is not True or payload.get("action_key") != action_key):
+        raise ValueError("exact accepted native postflight response required")
 
 
 def execute_sync(

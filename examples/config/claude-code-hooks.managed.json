@@ -1,8 +1,8 @@
 {
   "hooks": {
-    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "atellagent-hook-adapter --host claude-code --socket /run/user/<uid>/atellagent/control.sock", "timeout": 8}]}],
-    "PreToolUse": [{"hooks": [{"type": "command", "command": "atellagent-hook-adapter --host claude-code --socket /run/user/<uid>/atellagent/control.sock", "timeout": 8}]}],
-    "PostToolUse": [{"hooks": [{"type": "command", "command": "atellagent-hook-adapter --host claude-code --socket /run/user/<uid>/atellagent/control.sock", "timeout": 8}]}],
-    "PostToolUseFailure": [{"hooks": [{"type": "command", "command": "atellagent-hook-adapter --host claude-code --socket /run/user/<uid>/atellagent/control.sock", "timeout": 8}]}]
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python -m atellagent_client.hook_launcher --host claude-code --socket /run/user/<uid>/atellagent/control.sock", "timeout": 20}]}],
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "python -m atellagent_client.hook_launcher --host claude-code --socket /run/user/<uid>/atellagent/control.sock", "timeout": 20}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "python -m atellagent_client.hook_launcher --host claude-code --socket /run/user/<uid>/atellagent/control.sock", "timeout": 20}]}],
+    "PostToolUseFailure": [{"hooks": [{"type": "command", "command": "python -m atellagent_client.hook_launcher --host claude-code --socket /run/user/<uid>/atellagent/control.sock", "timeout": 20}]}]
   }
 }

@@ -33,7 +33,6 @@ import asyncio
 
 from atellagent_client.connected import mount_agent_handler
 from atellagent_client.sdk import ConnectedSDKRuntime
-from atellagent_client.sdk.config import load_service_account_config_from_yaml
 
 
 async def customer_agent(payload: dict) -> dict:
@@ -43,10 +42,9 @@ async def customer_agent(payload: dict) -> dict:
     return {"content": f"Handled: {message}", "metadata": {}}
 
 
-async def run() -> None:
-    runtime = ConnectedSDKRuntime(
-        load_service_account_config_from_yaml("integration.yaml")
-    )
+async def run(workload_context, request_id) -> None:
+    config, _ = await workload_context.runtime(request_id)
+    runtime = ConnectedSDKRuntime(config)
     mount_agent_handler(
         runtime,
         customer_agent,
@@ -59,8 +57,13 @@ async def run() -> None:
         await runtime.stop()
 
 
-asyncio.run(run())
 ```
+
+Create the approved saved workload using the [connected-runtime setup flow](../connected/README.md).
+Pass its `WorkloadContext` and request ID to this function; the context supplies
+managed identity, credentials and authenticated endpoints, not an imported YAML
+configuration. Runnable examples take `--state-directory` and `--request-id` and
+reject a workload whose approved type or packaging does not match the recipe.
 
 For a consequential handler, set `consequential=True` and
 `target_idempotent=True`, then pass the delivery idempotency key to the

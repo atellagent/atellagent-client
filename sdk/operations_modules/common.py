@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_MODEL_INVOCATION_FIELDS = {
     "memory_thread_id",
+    "context_mode",
     "model",
     "provider",
     "response_mode",

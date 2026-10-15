@@ -68,6 +68,7 @@ _MODEL_OPTION_FIELDS = {
 
 _MODEL_RUNTIME_FIELDS = {
     "model",
+    "context_operation",
     "messages",
     "memory_thread_id",
     "provider",
@@ -88,7 +89,9 @@ _FILTER_RUNTIME_FIELDS = {
 }
 
 
-def _require_declared_fields(raw: Dict[str, Any], allowed: set[str], *, kind: str) -> None:
+def _require_declared_fields(
+    raw: Dict[str, Any], allowed: set[str], *, kind: str
+) -> None:
     unsupported = sorted(set(raw) - allowed)
     if unsupported:
         raise ValueError(
@@ -106,6 +109,7 @@ class ModelRuntimeInvocationRequest:
     request_id: Optional[str] = None
     workflow_context: Dict[str, Any] = field(default_factory=dict)
     options: Dict[str, Any] = field(default_factory=dict)
+    context_operation: str = "generate"
 
 
 @dataclass(frozen=True)
@@ -124,8 +128,22 @@ class ModelRuntimeHandler(Protocol):
     async def invoke_model(
         self,
         request: ModelRuntimeInvocationRequest,
-    ) -> Dict[str, Any]:
-        ...
+    ) -> Dict[str, Any]: ...
+
+
+@runtime_checkable
+class ModelContextRuntimeHandler(ModelRuntimeHandler, Protocol):
+    """Optional governed, generation-free whole-request accounting.
+
+    Return the closed atellagent.connected.model-context.v1 document. Count
+    every message/tool/framing option with the selected model's tokenizer;
+    report actual supported limits and a stable tokenizer/config revision.
+    Do not log input or call generation from this method.
+    """
+
+    async def measure_model_context(
+        self, request: ModelRuntimeInvocationRequest
+    ) -> Dict[str, Any]: ...
 
 
 @runtime_checkable
@@ -133,8 +151,7 @@ class FilterRuntimeHandler(Protocol):
     async def evaluate_filter(
         self,
         request: FilterRuntimeEvaluationRequest,
-    ) -> Dict[str, Any]:
-        ...
+    ) -> Dict[str, Any]: ...
 
 
 class ModelRuntimeHandlerBase:
@@ -163,13 +180,15 @@ def coerce_model_runtime_invocation_request(
     model = str(raw.get("model") or "").strip()
     if not model:
         raise ValueError("model is required")
+    purpose = raw.get("context_operation", "generate")
+    if purpose not in ("generate", "measure") or not isinstance(purpose, str):
+        raise ValueError("Unsupported model context operation")
     options = {
-        key: raw.get(key)
-        for key in _MODEL_OPTION_FIELDS
-        if raw.get(key) is not None
+        key: raw.get(key) for key in _MODEL_OPTION_FIELDS if raw.get(key) is not None
     }
     return ModelRuntimeInvocationRequest(
         model=model,
+        context_operation=purpose,
         messages=_coerce_messages(raw.get("messages")),
         memory_thread_id=str(raw.get("memory_thread_id") or "").strip() or None,
         provider=str(raw.get("provider") or "").strip().lower() or None,
@@ -247,6 +266,7 @@ __all__ = [
     "FilterRuntimeHandler",
     "FilterRuntimeHandlerBase",
     "ModelRuntimeHandler",
+    "ModelContextRuntimeHandler",
     "ModelRuntimeHandlerBase",
     "ModelRuntimeInvocationRequest",
     "coerce_filter_runtime_evaluation_request",

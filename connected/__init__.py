@@ -4,6 +4,7 @@
 """Public connected-runtime participation API."""
 
 from .actions import ConnectedActionClient
+from .agent_actions import AgentParticipantActions
 from .bridge import ConnectedBridge
 from .adapters import (
     mount_agent_handler,
@@ -24,8 +25,10 @@ from .participant import (
     ConnectedParticipant,
 )
 from .mcp_client import LocalMCPClient
+from .mcp_errors import MCPTargetError
 
 __all__ = [
+    "AgentParticipantActions",
     "ConnectedActionClient",
     "ConnectedBridge",
     "ConnectedDelivery",
@@ -35,6 +38,7 @@ __all__ = [
     "ConnectedParticipant",
     "ConnectedProtocolError",
     "LocalMCPClient",
+    "MCPTargetError",
     "mount_agent_handler",
     "mount_channel_registry",
     "mount_filter_handler",

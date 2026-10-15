@@ -5,59 +5,42 @@
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
-from atellagent_client.sdk.config import ServiceAccountConfig
-from atellagent_client.sdk.telemetry import (
-    TelemetryEmitter,
-    make_authenticated_telemetry_emitter,
-)
+from atellagent_client.onboarding.workload_runtime import open_workload_runtime
+from atellagent_client.onboarding.workload_setup_flow import WorkloadSetupFlow
+from atellagent_client.sdk.telemetry import TelemetryEmitter
 from .client_class import AtellagentClient
 
 
-def create_service_account_client(
-    client_id: str,
-    gateway_url: str,
-    oauth_token_url: Optional[str] = None,
-    oauth_jwks_url: Optional[str] = None,
+async def create_service_account_client(
+    *,
+    flow: WorkloadSetupFlow,
+    deployment: Optional[dict] = None,
+    local_guardrail_manifest_path: Optional[str] = None,
     timeout: float = 120.0,
-    cert_path: Optional[str] = None,
-    key_path: Optional[str] = None,
     telemetry_emitter: Optional[TelemetryEmitter] = None,
-    integration_type: Optional[str] = None,
-    service_account_id: Optional[str] = None,
-    telemetry_url: Optional[str] = None,
-    api_version: str = "v1",
-    contract_version: str = "v1",
 ) -> AtellagentClient:
-    """Create client with service account authentication."""
-    config = ServiceAccountConfig(
-        client_id=client_id,
-        gateway_url=gateway_url,
-        oauth_token_url=oauth_token_url,
-        oauth_jwks_url=oauth_jwks_url,
-        service_account_id=service_account_id,
-        telemetry_url=telemetry_url,
-        api_version=api_version,
-        contract_version=contract_version,
-        cert_path=cert_path,
-        key_path=key_path,
-        timeout=timeout,
-        integration_type=integration_type,
-    )
-    effective_emitter = telemetry_emitter
-    if (
-        not effective_emitter
-        and config.telemetry_url
-        and str(config.integration_type or "").lower() != "agent"
-    ):
-        effective_emitter = make_authenticated_telemetry_emitter(config)
+    """Resume approved setup and open a machine-authenticated SDK client.
+
+    No browser login is initiated here. Pending or denied setup raises a bounded
+    onboarding error; it never creates a replacement identity or bypasses approval.
+    """
+    if not isinstance(flow, WorkloadSetupFlow):
+        raise TypeError("approved workload setup flow required")
+    if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("positive finite SDK timeout required")
+    config = await open_workload_runtime(flow=flow, deployment=deployment,
+                                       local_guardrail_manifest_path=local_guardrail_manifest_path)
+    config.timeout = float(timeout)
     return AtellagentClient(
         service_account_config=config,
         timeout=timeout,
-        telemetry_emitter=effective_emitter,
-        integration_type=integration_type,
-        service_account_id=service_account_id or config.service_account_id,
+        telemetry_emitter=telemetry_emitter,
+        integration_type=config.integration_type,
+        service_account_id=config.service_account_id,
+        device_proof_provider=flow.device_request_provider(),
     )
 
 __all__ = ["create_service_account_client"]

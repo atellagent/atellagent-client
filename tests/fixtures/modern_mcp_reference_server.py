@@ -18,7 +18,10 @@ for line in sys.stdin:
             "supportedVersions": ["2026-07-28"],
             "cacheScope": "private",
             "ttlMs": 0,
-            "capabilities": {"tools": {}},
+            # Echo is pure and returns the same result across process restarts;
+            # retries have no mutable side effects to deduplicate.
+            "capabilities": {"tools": {}, "experimental": {
+                "atellagent/durableIdempotency": {"key": "atellagent/idempotencyKey", "durable": True}}},
         }
     elif method == "tools/list":
         result = {

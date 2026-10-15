@@ -10,8 +10,11 @@ from typing import Any, Dict, Mapping
 
 from atellagent_client.sdk.config import ServiceAccountConfig
 from atellagent_client.sdk.gateway.session import GatewaySession
+from atellagent_client.sdk.operations_modules.mcp import _extract_error_message
 
 from .contracts import ConnectedMessage, ConnectedProtocolError
+from .model_actions import ConnectedModelActions
+from .agent_events import ConnectedAgentEvents
 
 
 @dataclass
@@ -23,7 +26,7 @@ class _DeliveryActionContext:
     capability: str
 
 
-class ConnectedActionClient:
+class ConnectedActionClient(ConnectedModelActions, ConnectedAgentEvents):
     """Keep the bearer out of handler DTOs, logs, and normal application APIs.
 
     The participant process is a trusted boundary. Deploy untrusted handlers in
@@ -32,6 +35,7 @@ class ConnectedActionClient:
 
     def __init__(self, context: _DeliveryActionContext) -> None:
         self._context = context
+        ConnectedAgentEvents.__init__(self, context)
 
     def _url(self, template: str) -> str:
         path = template.format(
@@ -52,17 +56,20 @@ class ConnectedActionClient:
         normalized_effect_key = str(effect_key or "").strip()
         if not normalized_effect_key:
             raise ValueError("effect_key is required")
+        url = self._url(self._context.config.mcp_action_path_template)
+        payload = {"effect_key": normalized_effect_key, "request": dict(request)}
+        headers = {"X-Atellagent-Connected-Capability": self._context.capability}
         response = await self._context.session.request_authenticated(
             "POST",
-            self._url(self._context.config.mcp_action_path_template),
-            json={"effect_key": normalized_effect_key, "request": dict(request)},
-            headers={"X-Atellagent-Connected-Capability": self._context.capability},
+            url,
+            json=payload,
+            headers=headers,
         )
         if response.http_version != "HTTP/2":
             raise ConnectedProtocolError("connected action did not use HTTP/2")
         if response.status_code >= 400:
             try:
-                detail = response.json().get("detail")
+                detail = _extract_error_message(response.json())
             except Exception:
                 detail = response.text
             raise ConnectedProtocolError(

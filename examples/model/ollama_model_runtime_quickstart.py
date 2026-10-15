@@ -8,17 +8,16 @@ from __future__ import annotations
 import asyncio
 import os
 
-from atellagent_client.examples import bundled_example_path
+from atellagent_client.examples.workload import load_workload_config, options
 from atellagent_client.connected import mount_model_handler
 from atellagent_client.integrations.models import OllamaModelRuntimeHandler
 from atellagent_client.sdk import ConnectedSDKRuntime
-from atellagent_client.sdk.config import load_service_account_config_from_yaml
 
 
-async def run() -> None:
-    config_path = os.getenv("CONFIG_PATH") or bundled_example_path("config/model.yaml")
+async def run(directory, request_id) -> None:
+    config = await load_workload_config(directory, request_id, integration_type="model", packaging="sdk")
     handler = OllamaModelRuntimeHandler(host=os.getenv("OLLAMA_HOST"))
-    runtime = ConnectedSDKRuntime(load_service_account_config_from_yaml(config_path))
+    runtime = ConnectedSDKRuntime(config)
     mount_model_handler(runtime, handler, target_idempotent=True)
     try:
         await runtime.run_forever()
@@ -27,4 +26,5 @@ async def run() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    args = options()
+    asyncio.run(run(args.state_directory, args.request_id))

@@ -145,45 +145,39 @@ class HTTPClientManager:
     async def _validate_httpx_response_async(self, response: httpx.Response) -> None:
         self._validate_httpx_response(response)
 
+    def create_sync_client(self) -> httpx.Client:
+        """Create an independently owned synchronous HTTP client."""
+        return httpx.Client(
+            timeout=self.timeout,
+            verify=self._ssl_context or self._verify_target,
+            cert=None if self._ssl_context else self._cert_tuple,
+            trust_env=False,
+            http2=self.http2,
+            event_hooks={"response": [self._validate_httpx_response]},
+        )
+
     def get_sync_client(self) -> httpx.Client:
-        """Get or create synchronous HTTP client"""
+        """Get or create a pooled synchronous HTTP client."""
         if self._sync_client is None:
-            self._sync_client = httpx.Client(
-                timeout=self.timeout,
-                verify=self._ssl_context or self._verify_target,
-                cert=None if self._ssl_context else self._cert_tuple,
-                trust_env=False,
-                http2=self.http2,
-                event_hooks={"response": [self._validate_httpx_response]},
-            )
+            self._sync_client = self.create_sync_client()
         return self._sync_client
 
+    def create_async_client(self) -> httpx.AsyncClient:
+        """Create an independently owned asynchronous HTTP client."""
+        return httpx.AsyncClient(
+            timeout=self.timeout,
+            verify=self._ssl_context or self._verify_target,
+            cert=None if self._ssl_context else self._cert_tuple,
+            trust_env=False,
+            http2=self.http2,
+            event_hooks={"response": [self._validate_httpx_response_async]},
+        )
+
     async def get_async_client(self) -> httpx.AsyncClient:
-        """Get or create asynchronous HTTP client"""
+        """Get or create a pooled asynchronous HTTP client."""
         if self._async_client is None:
-            self._async_client = httpx.AsyncClient(
-                timeout=self.timeout,
-                verify=self._ssl_context or self._verify_target,
-                cert=None if self._ssl_context else self._cert_tuple,
-                trust_env=False,
-                http2=self.http2,
-                event_hooks={"response": [self._validate_httpx_response_async]},
-            )
+            self._async_client = self.create_async_client()
         return self._async_client
-
-    async def reset_async_client(self) -> None:
-        """Discard a broken pooled async transport without touching credentials."""
-
-        client, self._async_client = self._async_client, None
-        if client is not None:
-            await client.aclose()
-
-    def reset_sync_client(self) -> None:
-        """Discard a broken pooled sync transport without touching credentials."""
-
-        client, self._sync_client = self._sync_client, None
-        if client is not None:
-            client.close()
 
     def _track_async_close_task(self, task: asyncio.Task) -> None:
         self._pending_async_close_tasks.add(task)

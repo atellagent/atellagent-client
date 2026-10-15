@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
@@ -19,6 +20,7 @@ from atellagent_client.sdk.config_models import SDKDeploymentConfig, ServiceAcco
 
 def _config() -> ServiceAccountConfig:
     return ServiceAccountConfig(
+        platform_origin="https://platform.example",
         client_id="client-id",
         gateway_url="https://mtls.gateway.example",
         oauth_token_url="https://mtls.auth.example/token",
@@ -66,7 +68,7 @@ class ConnectedCapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.message = parse_connected_message(_message()["message"])
         self.claims = {
             "typ": "atellagent_connected_runtime_capability",
-            "schema_version": "v1",
+            "schema_version": "v2",
             "iss": "gateway",
             "sub": self.message.message_id,
             "aud": [
@@ -79,6 +81,11 @@ class ConnectedCapabilityTests(unittest.IsolatedAsyncioTestCase):
             "target_certificate_public_key_sha256": "certificate-fingerprint",
             "integration_type": "agent",
             "operation": self.message.operation,
+            "payload_schema": self.message.payload_schema,
+            "payload_sha256": hashlib.sha256(json.dumps(
+                self.message.payload, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")).hexdigest(),
             "message_id": self.message.message_id,
             "lease_id": self.message.lease.lease_id,
             "delivery_attempt": self.message.lease.attempt_number,
@@ -121,7 +128,9 @@ class ConnectedCapabilityTests(unittest.IsolatedAsyncioTestCase):
     async def test_every_delivery_binding_mismatch_fails_closed(self) -> None:
         mismatches = {
             "typ": "wrong",
-            "schema_version": "v2",
+            "schema_version": "v1",
+            "payload_schema": "other-schema",
+            "payload_sha256": "0" * 64,
             "sub": str(uuid4()),
             "tenant_id": str(uuid4()),
             "target_service_account_id": str(uuid4()),
