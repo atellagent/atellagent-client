@@ -10,7 +10,7 @@ import httpx
 from atellagent_client.connected import AgentParticipantActions, mount_agent_handler
 from atellagent_client.connected.actions import ConnectedActionClient, _DeliveryActionContext
 from atellagent_client.connected.contracts import ConnectedProtocolError, parse_connected_message
-from atellagent_client.tests.connected_runtime_support import _config, _message
+from connected_runtime_support import _config, _message
 
 
 class AgentActionTests(unittest.IsolatedAsyncioTestCase):
