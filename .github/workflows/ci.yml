@@ -151,34 +151,8 @@ jobs:
 
       - name: Compile and test public Python sources
         run: |
-          python -m compileall -q cli connected examples governance integrations onboarding pep protocol proxy sdk __init__.py _version.py
-          python -m unittest discover -s tests -v
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_onboarding_device_proofs.py tests/test_device_http.py tests/test_device_requests.py tests/test_device_management_client.py tests/test_device_reporter.py tests/test_device_contracts.py tests/test_bootstrap_metadata.py tests/test_device_login.py tests/test_setup_management_models.py tests/test_setup_store.py tests/test_device_csr.py tests/test_device_certificate_verify.py tests/test_device_certificate_delivery.py tests/test_device_credential_store.py tests/test_device_activation.py tests/test_device_resume.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_device_installation.py tests/test_device_runtime.py tests/test_device_setup_flow.py tests/test_pending_device_setup.py tests/test_setup_cli.py tests/test_discovery_reporting_preference.py tests/test_discovery_reporter_process_handoff.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_native_setup_flow.py tests/test_native_setup_cli.py tests/test_native_setup_context.py tests/test_native_runtime_binding.py tests/test_hook_control_native_binding.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_runtime_metadata.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_native_runtime_config.py tests/test_facade_native_binding.py tests/test_facade_cli.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_cli_native_runtime.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_native_runtime_selection.py tests/test_native_supervisor.py tests/test_native_controller_reconciliation.py tests/test_native_unselect.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_cli_hook_entry.py tests/test_hook_launcher.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_native_hook_definition.py tests/test_native_hook_preview.py tests/test_native_hook_json_merge.py tests/test_native_hook_toml_merge.py tests/test_native_hook_snapshot.py tests/test_native_hook_review.py tests/test_native_hook_posix_apply.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_native_service_controls.py tests/test_native_service_status.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_service_platform.py tests/test_service_files.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_setup_overview.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_setup_interaction.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_desktop_native_consent.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_native_saved_inventory.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_native_claim_client.py tests/test_device_assignments.py tests/test_device_assignment_lookup.py tests/test_service_account_trust.py tests/test_service_account_certificate_verify.py tests/test_native_certificate_delivery.py tests/test_native_setup_store.py tests/test_native_credential_store.py tests/test_native_credential_selection.py tests/test_native_management.py tests/test_workload_management.py tests/test_native_activation.py tests/test_service_account_http.py tests/test_native_activation_recovery.py tests/test_native_owner_consent.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_workload_proof_client.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_workload_credential_store.py tests/test_workload_activation.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_workload_receipt_store.py tests/test_workload_setup_flow.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_workload_runtime_metadata.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_workload_runtime_config.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_managed_sdk_factory.py tests/test_managed_agent_proxy.py tests/test_certificate_rotation.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_workload_local_inputs.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_workload_cli.py tests/test_cli_shutdown.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_workload_cli_submission.py -q
-          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests -c /dev/null tests/test_managed_workload_examples.py -q
+          python -m compileall -q cli connected discovery examples governance integrations onboarding pep protocol proxy runtime sdk __init__.py _version.py hook_launcher.py hook_limits.py
+          PYTHONPATH=tests python -m pytest --import-mode=importlib --rootdir=tests --confcutdir=tests -c /dev/null tests -q
 
       - name: Build the release wheel and source distribution once
         run: |
@@ -452,8 +426,17 @@ jobs:
           image='${{ steps.image.outputs.name }}'
           digest='${{ steps.image.outputs.digest }}'
           raw=$(docker buildx imagetools inspect --raw "$image@$digest")
-          grep -q 'linux/amd64' <<<"$raw"
-          grep -q 'linux/arm64' <<<"$raw"
+          python -c '
+          import json, sys
+          document = json.load(sys.stdin)
+          platforms = {
+              (entry.get("platform", {}).get("os"), entry.get("platform", {}).get("architecture"))
+              for entry in document["manifests"]
+          }
+          required = {("linux", "amd64"), ("linux", "arm64")}
+          if not required <= platforms:
+              raise SystemExit("Release manifest is missing a required Linux platform")
+          ' <<<"$raw"
           docker run --rm --platform linux/amd64 --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m,uid=10001,gid=10001,mode=700 --cap-drop ALL --security-opt no-new-privileges --user 10001:10001 "$image@$digest" --help >/dev/null
           {
             echo "## Atellagent client image release evidence"

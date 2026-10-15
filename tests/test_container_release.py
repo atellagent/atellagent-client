@@ -9,7 +9,11 @@ import ast
 import json
 from pathlib import Path
 import re
+import subprocess
+import sys
 import unittest
+
+import yaml
 
 
 class ContainerReleaseContractTests(unittest.TestCase):
@@ -133,6 +137,43 @@ class ContainerReleaseContractTests(unittest.TestCase):
             "tests/test_container_release.py",
         ):
             self.assertIn(path, source_paths)
+
+    def test_workflow_discovers_the_complete_public_test_suite(self) -> None:
+        workflow = yaml.safe_load(self.workflow)
+        steps = workflow["jobs"]["public-release-boundary"]["steps"]
+        script = next(
+            step["run"] for step in steps
+            if step.get("name") == "Compile and test public Python sources"
+        )
+        self.assertIn(
+            "PYTHONPATH=tests python -m pytest --import-mode=importlib "
+            "--rootdir=tests --confcutdir=tests -c /dev/null tests -q",
+            script,
+        )
+        self.assertNotIn("tests/test_", script)
+
+    def test_release_manifest_platform_check_reads_actual_platform_objects(self) -> None:
+        workflow = yaml.safe_load(self.workflow)
+        steps = workflow["jobs"]["client-release"]["steps"]
+        script = next(
+            step["run"] for step in steps
+            if step.get("name") == "Verify release manifest and record release evidence"
+        )
+        match = re.search(r"python -c '(.*?)' <<<\"\$raw\"", script, re.DOTALL)
+        self.assertIsNotNone(match)
+        platforms = [
+            {"platform": {"os": "linux", "architecture": "amd64"}},
+            {"platform": {"os": "linux", "architecture": "arm64"}},
+            {"platform": {"os": "unknown", "architecture": "unknown"}},
+        ]
+        for entries, expected in ((platforms, 0), (platforms[:1], 1), (platforms[1:], 1), ([], 1)):
+            with self.subTest(platforms=entries):
+                result = subprocess.run(
+                    [sys.executable, "-c", match.group(1)],
+                    input=json.dumps({"manifests": entries, "note": "linux/amd64 linux/arm64"}),
+                    capture_output=True, text=True, timeout=5,
+                )
+                self.assertEqual(result.returncode, expected, result.stderr)
 
 
 if __name__ == "__main__":
