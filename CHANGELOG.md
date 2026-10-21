@@ -13,6 +13,9 @@ Copyright (c) 2026 Atellagent, Inc. All rights reserved. See [LICENSE.md](http:/
 
 ## 0.9.1
 
+- Corrected package-description links for PyPI and updated pip bootstrap to the
+  hash-verified security release; removed the compromised emSign G3 root from
+  container system trust and removed bundled ensurepip from the runtime.
 - Added private native-host setup, discovery, credential selection, and governed
   hook configuration and execution.
 - Aligned documented integrations with the public factory and client APIs.
