@@ -4,7 +4,7 @@
 import asyncio
 import unittest
 from types import SimpleNamespace
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, uuid5, uuid4
 
 import httpx
 from atellagent_client.connected import AgentParticipantActions, mount_agent_handler
@@ -14,22 +14,26 @@ from connected_runtime_support import _config, _message
 
 
 class AgentActionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_agent_events_reuse_sdk_ingest_and_the_enrolled_identity(self):
+    async def test_agent_events_use_current_delivery_and_the_enrolled_identity(self):
         message = parse_connected_message(_message()['message'])
         calls = []
         async def request(method, url, **kwargs):
             calls.append((method, url, kwargs))
-            return httpx.Response(200, json={'success': True}, request=httpx.Request(method, url))
+            return httpx.Response(200, json={'success': True}, request=httpx.Request(method, url),
+                extensions={'http_version': b'HTTP/2'})
         config = _config()
         actions = ConnectedActionClient(_DeliveryActionContext(config,
             SimpleNamespace(base_url='https://gateway.test', request_authenticated=request),
-            'instance', message, message.capability))
+            str(uuid4()), message, message.capability))
         result = await actions.emit_agent_event_async(method='runtime_start',
             extra={'state_snapshot': {'phase': 'running'}})
         self.assertTrue(result['success'])
-        self.assertEqual(calls[0][1], 'https://gateway.test/v1/agent-events/ingest')
+        self.assertEqual(calls[0][1],
+            f'https://gateway.test/v1/connected-runtimes/instances/{actions._context.instance_id}'
+            f'/messages/{message.message_id}/leases/{message.lease.lease_id}/actions/event')
         self.assertEqual(calls[0][2]['json']['service_account_id'], config.service_account_id)
-        self.assertNotIn('X-Atellagent-Connected-Capability', calls[0][2]['headers'])
+        self.assertEqual(calls[0][2]['headers'],
+            {'X-Atellagent-Connected-Capability': message.capability})
 
     async def test_mcp_failure_uses_shared_error_envelope_parser(self):
         message = parse_connected_message(_message()['message'])

@@ -40,8 +40,10 @@ class NativeAuthorityGoalRecoveryTests(HookControlRuntimeCase):
                         self.assertEqual(response.stderr, '')
                     ordinary = await handle_host_hook('codex', self.socket_path,
                         self.event(tool='view_image'))
-                    self.assertEqual(ordinary.exit_code, 2)
-                    self.assertNotIn('private server prose', ordinary.stderr)
+                    self.assertEqual(ordinary.exit_code, 0)
+                    self.assertEqual(ordinary.stderr, '')
+                    self.assertEqual(json.loads(ordinary.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
+                    self.assertNotIn('private server prose', ordinary.stdout)
                     self.assertEqual(self.governance.action_gate.calls, [])
 
     async def test_authored_policy_reason_collision_stays_a_deny(self):
@@ -65,7 +67,9 @@ class NativeAuthorityGoalRecoveryTests(HookControlRuntimeCase):
         ):
             with self.subTest(host=host, event=event):
                 response = await handle_host_hook(host, self.socket_path, event)
-                self.assertEqual(response.exit_code, 2)
+                self.assertEqual(response.exit_code, 0)
+                self.assertEqual(response.stderr, '')
+                self.assertEqual(json.loads(response.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
 
     def test_policy_envelope_cannot_claim_native_error_provenance_by_reason(self):
         for code in CODES:

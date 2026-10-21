@@ -28,6 +28,7 @@ class VerifiedDeviceCredential:
     certificate_chain_pem: str
     certificate_sha256: str
     expires_at: datetime
+    not_before: datetime
 
 
 def verify_device_material(*, tenant_id: UUID, device_id: UUID, public_key_der: bytes,
@@ -47,7 +48,7 @@ def verify_device_material(*, tenant_id: UUID, device_id: UUID, public_key_der: 
         verify_client_chain(leaf, certificate_chain_pem, trusted_ca_bundle_pem, verification_time=verification_time)
         fingerprint = sha256(leaf.public_bytes(serialization.Encoding.DER)).hexdigest()
         return VerifiedDeviceCredential(device_id, certificate_pem, certificate_chain_pem,
-            fingerprint, leaf.not_valid_after_utc)
+            fingerprint, leaf.not_valid_after_utc, leaf.not_valid_before_utc)
     except (ValueError, TypeError, KeyError, UnicodeError, UnsupportedAlgorithm,
         x509.ExtensionNotFound, x509.DuplicateExtension, VerificationError) as exc:
         raise OnboardingClientError("onboarding_device_certificate_invalid") from exc

@@ -26,7 +26,7 @@ from .host_hook_contracts import (
     host_hook_capabilities,
 )
 from .host_hook_events import _string, _tool_fields
-from .host_hook_responses import _failure, _pretool_result
+from .host_hook_responses import _failure, _pretool_result, _pretool_failure
 from .host_hook_recovery import (
     _is_codex_goal_lifecycle_transition,
     _goal_lifecycle_recovery_allowed,
@@ -36,6 +36,12 @@ from .host_hook_gemini import _handle_gemini_before_model, _handle_gemini_before
 from .host_hook_tools import _handle_prompt, _handle_pretool, _handle_posttool
 
 _MAX_STDIN_BYTES = MAX_HOST_INPUT_BYTES
+
+
+def _event_failure(host: str, event: Mapping[str, Any], exc: Exception | None = None) -> HookAdapterResponse:
+    if host in {"codex", "claude-code"} and event.get("hook_event_name") == "PreToolUse":
+        return _pretool_failure(host, exc)
+    return _failure(exc)
 
 
 async def handle_host_hook(
@@ -49,9 +55,9 @@ async def handle_host_hook(
         try:
             _tool_fields(host, event)
         except HookControlError as exc:
-            return _failure(exc)
+            return _event_failure(host, event, exc)
     if host not in _HOST_NAMES or not _valid_control_endpoint(socket_path):
-        return HookAdapterResponse(exit_code=0) if goal_lifecycle else _failure()
+        return HookAdapterResponse(exit_code=0) if goal_lifecycle else _event_failure(host, event)
     try:
         event_name = _string(event, "hook_event_name")
         if host == "gemini-cli":
@@ -80,10 +86,10 @@ async def handle_host_hook(
             and exc.code == "control_timeout"
         ):
             return _pretool_result(host, False, "control_timeout")
-        return _failure(exc)
-    except Exception:
+        return _event_failure(host, event, exc)
+    except Exception as exc:
         # Only exact terminal goal updates may recover from controller errors.
-        return HookAdapterResponse(exit_code=0) if goal_lifecycle else _failure()
+        return HookAdapterResponse(exit_code=0) if goal_lifecycle else _event_failure(host, event, exc)
 
 
 def _parse_stdin() -> Mapping[str, Any]:
