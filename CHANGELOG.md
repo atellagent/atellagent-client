@@ -5,6 +5,7 @@ Copyright (c) 2026 Atellagent, Inc. All rights reserved. See [LICENSE.md](http:/
 ## Unreleased
 
 - Recover failed background supervisors with OS restart limits while preserving explicit stops and private service storage.
+- Schedule certificate renewal before expiry and show retry warnings without blocking still-authorized connections.
 
 ## 0.9.1
 
