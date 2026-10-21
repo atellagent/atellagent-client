@@ -47,11 +47,6 @@ def load_device_renewal_history(*, device, trust):
     return _load(device=device, trust=trust, history_only=True)
 
 
-def retained_device_certificate_expiry(*, device, trust):
-    """Scheduling metadata only; never permission to use an expired TLS leaf."""
-    return retained_device_certificate_metadata(device=device, trust=trust).expires_at
-
-
 def retained_device_certificate_metadata(*, device, trust):
     """Historical material metadata, not current authority."""
     try:

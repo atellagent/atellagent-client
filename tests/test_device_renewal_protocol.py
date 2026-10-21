@@ -8,7 +8,6 @@ import httpx
 import pytest
 
 from atellagent_client.onboarding import device as clients
-from atellagent_client.onboarding.device_renewal_loop import DeviceRenewalLoop
 from atellagent_client.onboarding.device_renewal_protocol import require_renewal_progress
 from atellagent_client.onboarding.errors import OnboardingClientError
 from test_device_renewal_stage import renewal_case
@@ -68,16 +67,15 @@ async def test_renewal_activates_with_new_tls_then_selects_and_replaces_pool(tmp
     parent_pair = (device.certificate_path.read_bytes(), device.private_key_path.read_bytes())
     client = clients.DeviceManagementClient(origin=trust.device_api_origin, device=device,
         server_ca_path=Path("independent-server-ca.pem"))
-    loop = DeviceRenewalLoop(client, trust, Mock())
     try:
         if case == "denied_receipt":
             with pytest.raises(OnboardingClientError):
-                await loop.tick()
+                await client.renew_certificate(trust=trust)
             assert client.device == device
             assert not (device.certificate_path.parent / "device-renewed.json").exists()
             assert not pools[0].is_closed and pools[1].is_closed
         else:
-            assert await loop.tick()
+            await client.renew_certificate(trust=trust)
             renewed = client.device
             assert client.device == renewed and renewed.certificate_path != device.certificate_path
             assert renewed.proof_key is device.proof_key

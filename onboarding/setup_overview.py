@@ -24,7 +24,7 @@ async def overview(directory, *, after=None):
         draft, receipt, _ = installation.load()
         reason = DeviceRenewalState(directory, ReportingScope(draft.tenant_id,
             receipt.device_id, draft.owner_user_id)).read()
-        if reason is not None:
+        if reason is not None and reason["reason_code"] == "device_renewal_recovery_required":
             result["device"] = dict(device_id=str(receipt.device_id), tenant_id=str(draft.tenant_id),
                 tenant_name=None,
                 owner_user_id=str(draft.owner_user_id), device_name=draft.display_name,
@@ -42,6 +42,7 @@ async def overview(directory, *, after=None):
                 discovery_fresh=current.discovery_fresh,
                 discovery_observed_at=None if current.discovery_observed_at is None else current.discovery_observed_at.isoformat(),
                 server_time=current.server_time.isoformat())
+            result["device"]["certificate_renewal_warning"] = None if reason is None else reason["reason_code"]
             page = await context.client.assignments(after=after)
             result["assignments"] = [dict(request_id=str(row.request_id),
                 onboarding_session_id=str(row.onboarding_session_id), status=row.status,

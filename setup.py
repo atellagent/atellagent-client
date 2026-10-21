@@ -761,6 +761,8 @@ PUBLIC_SOURCE_PATHS = (
     "tests/test_control_gateway_failure_diagnostics.py",
     "tests/test_model_decision_capacity.py",
     "tests/test_service_entry_bootstrap.py",
+    "sdk/certificate_lifecycle.py",
+    "tests/test_certificate_lifecycle.py",
 )
 
 # Public source may import the standard library, this package, or the direct
