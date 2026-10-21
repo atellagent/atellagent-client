@@ -162,3 +162,26 @@ def _pretool_result(
         exit_code=0,
         stdout=_json({"hookSpecificOutput": output}),
     )
+
+
+def _pretool_failure(host: str, exc: Exception | None = None) -> HookAdapterResponse:
+    """Emit a supported denial for a recognized pre-tool failure.
+
+    Error exits are not a reliable refusal on every supported host stack.
+    Retain fixed local guidance without turning evaluation failures into a
+    policy decision or exposing exception text. This grants no allowance.
+    """
+    if host not in {"codex", "claude-code"}:
+        return _failure(exc)
+    invalid_error_code = isinstance(exc, HookControlError) and not isinstance(exc.code, str)
+    code = exc.code if isinstance(exc, HookControlError) and not invalid_error_code else None
+    if isinstance(exc, asyncio.TimeoutError) or code == "control_timeout":
+        return _pretool_result(host, False, "control_timeout")
+    if code == "policy_denied" or code in NATIVE_REJECTION_MESSAGES:
+        return _pretool_result(host, False, code)
+    reason = (_UNAVAILABLE_REASON if invalid_error_code or code in {"unknown_tool_call", "outcome_binding_mismatch"}
+              else _failure(exc).stderr)
+    return HookAdapterResponse(exit_code=0, stdout=_json({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse", "permissionDecision": "deny",
+        "permissionDecisionReason": reason,
+    }}))

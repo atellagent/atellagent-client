@@ -72,3 +72,47 @@ class NativeRejectionReasonTests(unittest.TestCase):
         self.assertEqual(_safe_error_code(caught.exception), 'policy_violation')
         for host in ('codex', 'claude-code'):
             self.assertEqual(_pretool_result(host, True, 'native_profile_path_invalid').stdout, '')
+
+
+class NativeRejectionCheckpointTests(unittest.IsolatedAsyncioTestCase):
+    async def test_known_rejection_is_structured_only_at_pretool_checkpoint(self):
+        from unittest.mock import AsyncMock, patch
+        from atellagent_client.integrations.agents.host_hooks import handle_host_hook
+        from atellagent_client.integrations.agents.hook_control_protocol import HookControlError
+
+        for host in ('codex', 'claude-code'):
+            for checkpoint in ('PreToolUse', 'PostToolUse', 'UserPromptSubmit'):
+                with self.subTest(host=host, checkpoint=checkpoint):
+                    event = {'hook_event_name': checkpoint, 'session_id': 'native-denial-checkpoint',
+                        'tool_use_id': 'fixture', 'tool_name': 'Read',
+                        'tool_input': {'file_path': 'fixture'}, 'prompt': 'synthetic'}
+                    call = AsyncMock(side_effect=HookControlError('native_profile_path_ambiguous'))
+                    with patch('atellagent_client.integrations.agents.host_hook_transport._call', call):
+                        response = await handle_host_hook(host, '/private/tmp/not-opened.sock', event)
+                    call.assert_awaited_once()
+                    if checkpoint == 'PreToolUse':
+                        self.assertEqual(response.exit_code, 0)
+                        self.assertEqual(json.loads(response.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
+                    else:
+                        self.assertEqual(response.exit_code, 2)
+                        self.assertEqual(response.stdout, '')
+
+    async def test_unknown_rpc_errors_are_not_promoted_to_native_denial_reasons(self):
+        from unittest.mock import AsyncMock, patch
+        from atellagent_client.integrations.agents.host_hooks import handle_host_hook
+        from atellagent_client.integrations.agents.hook_control_protocol import HookControlError
+
+        for host in ('codex', 'claude-code'):
+            for code in ('native_profile_path_ambiguous_PRIVATE', 'PRIVATE_DIAGNOSTIC', 'control_gateway_server_status'):
+                with self.subTest(host=host, code=code):
+                    event = {'hook_event_name': 'PreToolUse', 'session_id': 'native-denial-boundary',
+                        'tool_use_id': 'fixture', 'tool_name': 'Read', 'tool_input': {'file_path': 'fixture'}}
+                    with patch('atellagent_client.integrations.agents.host_hook_transport._call',
+                               AsyncMock(side_effect=HookControlError(code))):
+                        response = await handle_host_hook(host, '/private/tmp/not-opened.sock', event)
+                    self.assertEqual(response.exit_code, 0)
+                    self.assertEqual(response.stderr, '')
+                    output = json.loads(response.stdout)['hookSpecificOutput']
+                    self.assertEqual(output['permissionDecision'], 'deny')
+                    self.assertNotIn('unambiguous', output['permissionDecisionReason'])
+                    self.assertNotIn('PRIVATE', response.stdout)
