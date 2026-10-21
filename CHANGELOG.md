@@ -8,6 +8,7 @@ Copyright (c) 2026 Atellagent, Inc. All rights reserved. See [LICENSE.md](http:/
 - Schedule certificate renewal before expiry and show retry warnings without blocking still-authorized connections.
 - Retry transient connection establishment only for body-free onboarding reads within one deadline; preserve TLS and response failures.
 - Return explicit Codex and Claude Code pre-tool denials for adapter and transport failures without exposing private diagnostics.
+- Bind connected observations to their delivery and retry exact result commits without rerunning completed handlers.
 
 ## 0.9.1
 
