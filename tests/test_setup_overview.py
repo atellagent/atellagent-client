@@ -59,7 +59,8 @@ async def test_unsafe_local_selection_is_an_error_not_a_first_run(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_current_device_assignments_are_bounded_and_redacted(tmp_path, monkeypatch):
+@pytest.mark.parametrize("renewal_retrying", [False, True])
+async def test_current_device_assignments_are_bounded_and_redacted(tmp_path, monkeypatch, renewal_retrying):
     runtime = runtime_case(tmp_path)
     draft = runtime.case.draft
     assignment = replace(runtime.case.assignment, status="approved", owner_consented_at=None)
@@ -68,6 +69,9 @@ async def test_current_device_assignments_are_bounded_and_redacted(tmp_path, mon
     installation.path.write_bytes(b"fixture selector; context is substituted")
     monkeypatch.setattr(module.DeviceInstallation, "load", lambda self:
         (draft, SimpleNamespace(device_id=draft.device_id), "a" * 64))
+    if renewal_retrying:
+        module.DeviceRenewalState(directory, module.ReportingScope(draft.tenant_id,
+            draft.device_id, draft.owner_user_id)).save("device_renewal_retrying", certificate_sha256="a" * 64)
     now = datetime.now(timezone.utc)
     current = SimpleNamespace(device_id=draft.device_id, tenant_id=draft.tenant_id, owner_user_id=draft.owner_user_id,
         device_name="My device", tenant_name="Example", status="active", certificate_expires_at=now,
@@ -82,6 +86,8 @@ async def test_current_device_assignments_are_bounded_and_redacted(tmp_path, mon
     result = await module.overview(directory, after=after)
     client.assignments.assert_awaited_once_with(after=after)
     assert result["device"]["device_name"] == "My device" and result["pending"] is None
+    assert result["renewal"] is None  # A retry warning must not gate ordinary connections.
+    assert result["device"]["certificate_renewal_warning"] == ("device_renewal_retrying" if renewal_retrying else None)
     row = result["assignments"][0]
     assert row["request_id"] == str(assignment.request_id) and row["status"] == "approved"
     assert row["owner_consented_at"] is None and result["next_after"] == str(assignment.request_id)
@@ -123,3 +129,19 @@ async def test_recovery_hint_visible_without_network_or_authority_claim(tmp_path
     assert store.read() is not None
     store.clear_if_replaced("b" * 64)
     assert store.read() is None
+
+
+@pytest.mark.parametrize("reason", [[], {}, True, 1, "unexpected"])
+def test_malformed_renewal_reason_is_rejected_without_replacing_status(tmp_path, reason):
+    store = module.DeviceRenewalState(tmp_path,
+        module.ReportingScope(uuid4(), uuid4(), uuid4()))
+    store.save("device_renewal_retrying", certificate_sha256="a" * 64)
+    saved = store.path.read_bytes()
+    with pytest.raises(ValueError, match="closed renewal status required"):
+        store.save(reason, certificate_sha256="a" * 64)
+    assert store.path.read_bytes() == saved
+    record = json.loads(saved)
+    record["reason_code"] = reason
+    store.path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="exact device renewal status required"):
+        store.read()

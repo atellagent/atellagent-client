@@ -104,9 +104,19 @@ an already-running service alone. No agent configuration is required for a
 zero-controller device. Local running/controller status is not proof of current
 server authorization or fresh discovery reporting.
 
+After an unexpected service failure, macOS retries with a 30-second launch
+throttle; Windows retries up to three times at one-minute intervals. macOS does
+not impose a fixed retry count. An explicit **Stop service** remains stopped for
+the current session. Restarting the service retains enrollment and approved
+connections; it does not grant new permissions or require routine sign-in.
+
 ## Remove local enrollment or recover a device
 
 Normal certificate renewal runs in the background without another human login.
+The default certificate lifetime is 90 days. Automatic renewal begins 30 days
+before expiry, or in the final third of a shorter certificate's lifetime.
+Renewal retries appear as a warning without disabling still-valid, authorized
+connections. Keep the background service connected so it can finish renewal.
 If setup status reports recovery is required, signing in again does not repair
 the certificate. Stop the service, then explicitly archive the selected device:
 

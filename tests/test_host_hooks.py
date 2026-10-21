@@ -29,6 +29,15 @@ class HostHookAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.result = {"allowed": True}
         self.failure: Exception | None = None
 
+    def assert_pretool_denied(self, response):
+        self.assertEqual(response.exit_code, 0)
+        self.assertEqual(response.stderr, "")
+        body = json.loads(response.stdout)["hookSpecificOutput"]
+        self.assertEqual(set(body), {"hookEventName", "permissionDecision", "permissionDecisionReason"})
+        self.assertEqual(body["hookEventName"], "PreToolUse")
+        self.assertEqual(body["permissionDecision"], "deny")
+        return body["permissionDecisionReason"]
+
     async def _call(self, _socket: str, method: str, params: dict) -> dict:
         self.calls.append((method, params))
         if self.failure:
@@ -140,7 +149,7 @@ class HostHookAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         self.failure = HookControlError("policy_denied")
         response = await self._handle("codex", event)
-        self.assertEqual(response.exit_code, 2)
+        self.assert_pretool_denied(response)
 
         self.failure = None
         self.result = {"allowed": True}
@@ -153,7 +162,7 @@ class HostHookAdapterTests(unittest.IsolatedAsyncioTestCase):
             "tool_name": "update_goal", "tool_input": {"status": "paused"},
         }
         response = await self._handle("codex", event)
-        self.assertEqual(response.exit_code, 2)
+        self.assert_pretool_denied(response)
         self.assertEqual(self.calls, [])
 
     async def test_other_goal_calls_still_require_preflight(self) -> None:
@@ -191,8 +200,8 @@ class HostHookAdapterTests(unittest.IsolatedAsyncioTestCase):
             "tool_name": "exec_command",
             "tool_input": {"cmd": "pwd"},
         })
-        self.assertEqual(response.exit_code, 2)
-        self.assertIn("restart the local controller", response.stderr)
+        self.assert_pretool_denied(response)
+        self.assertIn("restart the local controller", self.assert_pretool_denied(response))
         response = await self._handle("codex", {
             "hook_event_name": "PreToolUse",
             "session_id": "session-1",
@@ -200,7 +209,7 @@ class HostHookAdapterTests(unittest.IsolatedAsyncioTestCase):
             "tool_name": "update_goal",
             "tool_input": {"status": "blocked", "extra": True},
         })
-        self.assertEqual(response.exit_code, 2)
+        self.assert_pretool_denied(response)
 
     async def test_control_reference_cannot_overwrite_a_customer_argument(self):
         self.result = {"allowed": True, "assessment_reference": "91f99348-7cc4-4253-ae25-d7f378aa6b0f"}
@@ -208,8 +217,8 @@ class HostHookAdapterTests(unittest.IsolatedAsyncioTestCase):
                  "tool_use_id": "tool", "tool_name": "mcp__example__read",
                  "tool_input": {"_atellagent_check": "customer-value"}}
         response = await self._handle("codex", event)
-        self.assertEqual(response.exit_code, 2)
-        self.assertEqual(response.stdout, "")
+        self.assert_pretool_denied(response)
+        self.assertEqual(response.stderr, "")
 
     async def test_only_preflight_timeouts_invite_one_unchanged_retry(self):
         event = {"hook_event_name": "PreToolUse", "session_id": "session",
@@ -381,10 +390,10 @@ class HostHookAdapterTests(unittest.IsolatedAsyncioTestCase):
                 self.failure = failure
                 self.result = result
                 response = await self._handle("codex", payload)
-                self.assertEqual(response.exit_code, 2)
-                self.assertEqual(response.stdout, "")
-                self.assertIn(expected, response.stderr)
-                self.assertNotIn("private detail", response.stderr)
+                self.assert_pretool_denied(response)
+                self.assertEqual(response.stderr, "")
+                self.assertIn(expected, self.assert_pretool_denied(response))
+                self.assertNotIn("private detail", self.assert_pretool_denied(response))
 
     async def test_unmatched_postflight_reports_audit_failure_not_execution_denial(self) -> None:
         self.failure = HookControlError("unknown_tool_call")
@@ -410,20 +419,20 @@ class HostHookAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         self.failure = HookControlError("control_unavailable")
         response = await self._handle("codex", event)
-        self.assertEqual(response.exit_code, 2)
+        self.assert_pretool_denied(response)
         self.failure = HookControlError("governed_action_decision_quota_exhausted")
         response = await self._handle("codex", event)
-        self.assertEqual(response.exit_code, 2)
-        self.assertIn("allowance is exhausted", response.stderr)
-        self.assertNotIn("unavailable", response.stderr)
+        self.assert_pretool_denied(response)
+        self.assertIn("allowance is exhausted", self.assert_pretool_denied(response))
+        self.assertNotIn("unavailable", self.assert_pretool_denied(response))
         self.failure = HookControlError("control_socket_access_denied")
         response = await self._handle("codex", event)
-        self.assertEqual(response.exit_code, 2)
-        self.assertIn("socket access was denied", response.stderr)
+        self.assert_pretool_denied(response)
+        self.assertIn("socket access was denied", self.assert_pretool_denied(response))
         self.failure = HookControlError("control_gateway_transport")
         response = await self._handle("codex", event)
-        self.assertEqual(response.exit_code, 2)
-        self.assertIn("remote control service could not be reached", response.stderr)
+        self.assert_pretool_denied(response)
+        self.assertIn("remote control service could not be reached", self.assert_pretool_denied(response))
         for code, message in (
             ("local_host_authorization_required", "device owner's consent"),
             ("local_host_authorization_expired", "replacement authorization"),
@@ -438,30 +447,30 @@ class HostHookAdapterTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(code=code):
                 self.failure = HookControlError(code)
                 response = await self._handle("codex", event)
-                self.assertEqual(response.exit_code, 2)
-                self.assertIn(message, response.stderr)
-                self.assertNotIn("service login", response.stderr)
-                self.assertNotIn("local control could not complete", response.stderr)
+                self.assert_pretool_denied(response)
+                self.assertIn(message, self.assert_pretool_denied(response))
+                self.assertNotIn("service login", self.assert_pretool_denied(response))
+                self.assertNotIn("local control could not complete", self.assert_pretool_denied(response))
         self.failure = HookControlError("control_gateway_client_status")
         response = await self._handle("codex", event)
-        self.assertIn("gateway rejected", response.stderr)
+        self.assertIn("gateway rejected", self.assert_pretool_denied(response))
         self.failure = HookControlError("model_decision_gateway_transport")
         response = await self._handle("codex", event)
-        self.assertEqual(response.exit_code, 2)
-        self.assertIn("could not be reached", response.stderr)
+        self.assert_pretool_denied(response)
+        self.assertIn("could not be reached", self.assert_pretool_denied(response))
         self.failure = HookControlError("control_directive_timeout")
         response = await self._handle("codex", event)
-        self.assertEqual(response.exit_code, 2)
-        self.assertIn("authorization in time", response.stderr)
+        self.assert_pretool_denied(response)
+        self.assertIn("authorization in time", self.assert_pretool_denied(response))
         self.failure = HookControlError("control_request_too_large")
         response = await self._handle("codex", event)
-        self.assertEqual(response.exit_code, 2)
-        self.assertIn("exceeds the local size limit", response.stderr)
-        self.assertNotIn("timed out", response.stderr)
+        self.assert_pretool_denied(response)
+        self.assertIn("exceeds the local size limit", self.assert_pretool_denied(response))
+        self.assertNotIn("timed out", self.assert_pretool_denied(response))
         response = await self._handle("codex", {"hook_event_name": "PreToolUse"})
-        self.assertEqual(response.exit_code, 2)
+        self.assert_pretool_denied(response)
         response = await host_hooks.handle_host_hook("codex", "relative.sock", event)
-        self.assertEqual(response.exit_code, 2)
+        self.assert_pretool_denied(response)
 
     async def test_unrecorded_postflight_is_an_adapter_failure(self) -> None:
         event = {
@@ -532,7 +541,7 @@ class HostHookAdapterTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(host=host):
                 self.calls.clear()
                 response = await self._handle(host, event)
-                self.assertEqual(response.exit_code, 2)
+                self.assert_pretool_denied(response)
                 self.assertEqual(len(self.calls), 1)
 
     async def test_mcp_names_retain_supported_postflight(self) -> None:

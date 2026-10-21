@@ -760,6 +760,13 @@ PUBLIC_SOURCE_PATHS = (
     "tests/test_private_keys.py",
     "tests/test_control_gateway_failure_diagnostics.py",
     "tests/test_model_decision_capacity.py",
+    "tests/test_service_entry_bootstrap.py",
+    "sdk/certificate_lifecycle.py",
+    "tests/test_certificate_lifecycle.py",
+    "tests/test_onboarding_json_transport.py",
+    "tests/test_pretool_failure_contract.py",
+    "tests/test_connected_commit_renewal_race.py",
+    "tests/test_connected_result_recovery.py",
 )
 
 # Public source may import the standard library, this package, or the direct
@@ -895,6 +902,7 @@ setup(
     install_requires=[
         # HTTP clients for sync and async
         "httpx==0.28.1",
+        "certifi==2026.10.19",
         "h2==4.3.0",
         "PyYAML==6.0.3",
         "PyJWT==2.14.0",

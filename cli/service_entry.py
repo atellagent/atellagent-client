@@ -16,14 +16,14 @@ def main() -> None:
     local_app_data = os.environ.get("LOCALAPPDATA")
     if not local_app_data:
         raise RuntimeError("Windows user profile storage is unavailable")
+    from atellagent_client.onboarding.private_paths import create_private_directory
+
     directory = Path(local_app_data) / "Atellagent" / "services"
-    if directory.is_symlink():
-        raise RuntimeError("Refusing symlinked service directory")
-    directory.mkdir(parents=True, exist_ok=True)
+    create_private_directory(directory.parent)
+    create_private_directory(directory)
 
     from atellagent_client.cli.windows_service import secure_user_path
 
-    secure_user_path(directory)
     log_path = directory / "supervisor.log"
     if log_path.is_symlink():
         raise RuntimeError("Refusing symlinked service log")
@@ -48,7 +48,9 @@ def main() -> None:
         asyncio.run(run())
     except Exception:
         logging.exception("Local controller supervisor exited unexpectedly")
-        raise
+        # Keep background failures nonzero without an unhandled-exception dialog
+        # from the windowless launcher. Details remain in the private service log.
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Atellagent, Inc. All rights reserved.
 # This source code is licensed under the terms found in the LICENSE.md file in the root directory of this source tree.
 
-"""Local recovery hint, not evidence of current device or execution authority."""
+"""Local renewal hint, not evidence of current device or execution authority."""
 
 import json
 import re
@@ -9,6 +9,8 @@ import re
 from .atomic_private_file import read_private_file
 from .private_record_update import replace_private_record
 from .process_lease import process_lease
+
+RENEWAL_REASONS = (None, "device_renewal_retrying", "device_renewal_recovery_required")
 
 
 class DeviceRenewalState:
@@ -30,14 +32,14 @@ class DeviceRenewalState:
         if (not isinstance(value, dict) or set(value) != set(expected) | {"reason_code", "certificate_sha256"}
                 or type(value["revision"]) is not int
                 or any(value[key] != item for key, item in expected.items())
-                or value["reason_code"] not in {None, "device_renewal_recovery_required"}
+                or value["reason_code"] not in RENEWAL_REASONS
                 or not isinstance(value["certificate_sha256"], str)
                 or not re.fullmatch(r"[0-9a-f]{64}", value["certificate_sha256"])):
             raise ValueError("exact device renewal status required")
         return None if value["reason_code"] is None else value
 
     def save(self, reason, *, certificate_sha256):
-        if reason not in {None, "device_renewal_recovery_required"}:
+        if reason not in RENEWAL_REASONS:
             raise ValueError("closed renewal status required")
         if not isinstance(certificate_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", certificate_sha256):
             raise ValueError("exact renewal fingerprint required")

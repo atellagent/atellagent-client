@@ -132,6 +132,8 @@ def register_task(host: str, command: list[str]) -> None:
         definition.RegistrationInfo.Description = f"Atellagent local controller: {host}"
         definition.Settings.Enabled = True
         definition.Settings.ExecutionTimeLimit = "PT0S"
+        definition.Settings.RestartCount = 3
+        definition.Settings.RestartInterval = "PT1M"
         definition.Settings.DisallowStartIfOnBatteries = False
         definition.Settings.StopIfGoingOnBatteries = False
         definition.Settings.MultipleInstances = 2  # Ignore a duplicate launch.
