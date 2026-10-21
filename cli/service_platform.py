@@ -72,7 +72,8 @@ def _supervisor_agent_data(state_directory: Path) -> bytes:
         "Label": _SUPERVISOR_LABEL,
         "ProgramArguments": _supervisor_command(),
         "RunAtLoad": True,
-        "KeepAlive": False,
+        "KeepAlive": {"SuccessfulExit": False},
+        "ThrottleInterval": 30,
         "StandardOutPath": str(log_path),
         "StandardErrorPath": str(log_path),
     }, sort_keys=True)

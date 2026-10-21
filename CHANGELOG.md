@@ -2,6 +2,10 @@ Copyright (c) 2026 Atellagent, Inc. All rights reserved. See [LICENSE.md](http:/
 
 # Changelog
 
+## Unreleased
+
+- Recover failed background supervisors with OS restart limits while preserving explicit stops and private service storage.
+
 ## 0.9.1
 
 - Added private native-host setup, discovery, credential selection, and governed
