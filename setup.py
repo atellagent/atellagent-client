@@ -765,6 +765,8 @@ PUBLIC_SOURCE_PATHS = (
     "tests/test_certificate_lifecycle.py",
     "tests/test_onboarding_json_transport.py",
     "tests/test_pretool_failure_contract.py",
+    "tests/test_connected_commit_renewal_race.py",
+    "tests/test_connected_result_recovery.py",
 )
 
 # Public source may import the standard library, this package, or the direct
