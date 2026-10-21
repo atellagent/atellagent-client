@@ -81,3 +81,26 @@ def test_windows_start_uses_windowless_shared_task_without_restart(monkeypatch, 
     module.start()
     start.assert_called_once_with("supervisor", command)
     stop.assert_not_called()
+
+
+def test_mac_explicit_stop_unloads_the_job_instead_of_killing_its_process(monkeypatch):
+    platform = module.service
+    monkeypatch.setattr(platform.sys, "platform", "darwin")
+    monkeypatch.setattr(platform, "_require_supported_platform", Mock())
+    monkeypatch.setattr(platform, "_validate_supervisor", Mock())
+    monkeypatch.setattr(platform, "_supervisor_loaded", lambda: True)
+    launch, wait = Mock(), Mock()
+    monkeypatch.setattr(platform, "_launchctl", launch)
+    monkeypatch.setattr(platform, "_wait_for_unloaded", wait)
+    module.stop()
+    launch.assert_called_once_with("bootout", platform._supervisor_target())
+    wait.assert_called_once_with(platform._supervisor_target())
+
+
+def test_windows_explicit_stop_terminates_the_registered_task_without_relaunch(monkeypatch):
+    from atellagent_client.cli import windows_service
+    task = Mock(State=4)
+    monkeypatch.setattr(windows_service, "validate_task", Mock(return_value=task))
+    windows_service.stop_task("supervisor", ["C:/Atellagent/atellagent-service.exe"])
+    task.Stop.assert_called_once_with(0)
+    task.Run.assert_not_called()

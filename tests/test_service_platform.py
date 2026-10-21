@@ -1,6 +1,7 @@
 """OS contracts preserved from the retired config-driven service suite."""
 
 from pathlib import Path
+import plistlib
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,15 @@ from atellagent_client.cli import service_platform as service, windows_service
 
 
 class ServicePlatformTests(unittest.TestCase):
+    def test_mac_service_restarts_failures_with_throttling_not_clean_exits(self) -> None:
+        command = ["/Applications/Atellagent.app/Contents/Resources/runtime/atellagent-cli/atellagent-cli", "service", "run"]
+        with patch.object(service, "_supervisor_command", return_value=command):
+            definition = plistlib.loads(service._supervisor_agent_data(Path("/private/service-state")))
+        self.assertEqual(definition["KeepAlive"], {"SuccessfulExit": False})
+        self.assertEqual(definition["ThrottleInterval"], 30)
+        self.assertTrue(definition["RunAtLoad"])
+        self.assertEqual(definition["ProgramArguments"], command)
+
     def test_launchctl_timeout_reports_uncertain_state_instead_of_success(self) -> None:
         with patch.object(service.subprocess, "run", side_effect=subprocess.TimeoutExpired("launchctl", 15)) as run:
             with self.assertRaisesRegex(service.ServiceCommandError, "timed out; refresh local service status"):
@@ -60,6 +70,9 @@ class ServicePlatformTests(unittest.TestCase):
         self.assertEqual("S-1-5-21-123", definition.Principal.UserId)
         self.assertEqual(3, definition.Principal.LogonType)
         self.assertEqual(0, definition.Principal.RunLevel)
+        self.assertEqual(3, definition.Settings.RestartCount)
+        self.assertEqual("PT1M", definition.Settings.RestartInterval)
+        self.assertEqual(2, definition.Settings.MultipleInstances)
         self.assertEqual(9, definition.Triggers.kind)
         self.assertEqual("S-1-5-21-123", definition.Triggers.item.UserId)
         self.assertEqual(0, definition.Actions.kind)

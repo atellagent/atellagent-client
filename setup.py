@@ -760,6 +760,7 @@ PUBLIC_SOURCE_PATHS = (
     "tests/test_private_keys.py",
     "tests/test_control_gateway_failure_diagnostics.py",
     "tests/test_model_decision_capacity.py",
+    "tests/test_service_entry_bootstrap.py",
 )
 
 # Public source may import the standard library, this package, or the direct
