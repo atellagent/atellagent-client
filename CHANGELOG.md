@@ -4,6 +4,7 @@ Copyright (c) 2026 Atellagent, Inc. All rights reserved. See [LICENSE.md](http:/
 
 ## Unreleased
 
+- Pin the patched certifi CA bundle for GHSA-6q48-6c7w-9gw2 and refresh its verified container hash and license notice.
 - Recover failed background supervisors with OS restart limits while preserving explicit stops and private service storage.
 - Schedule certificate renewal before expiry and show retry warnings without blocking still-authorized connections.
 - Retry transient connection establishment only for body-free onboarding reads within one deadline; preserve TLS and response failures.

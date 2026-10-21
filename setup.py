@@ -902,6 +902,7 @@ setup(
     install_requires=[
         # HTTP clients for sync and async
         "httpx==0.28.1",
+        "certifi==2026.10.19",
         "h2==4.3.0",
         "PyYAML==6.0.3",
         "PyJWT==2.14.0",
