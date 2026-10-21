@@ -35,10 +35,9 @@ class GoalAdmissionRecoveryTests(HookControlRuntimeCase):
         raise AssertionError('Expected gateway refusal')
 
     def assert_blocked(self, response):
-        if response.exit_code == 0:
-            self.assertEqual(json.loads(response.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
-        else:
-            self.assertEqual(response.exit_code, 2)
+        self.assertEqual(response.exit_code, 0)
+        self.assertEqual(response.stderr, '')
+        self.assertEqual(json.loads(response.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
 
     async def test_real_quota_coverage_connection_and_transport_failures_release_only_terminal_goals(self):
         cases = (
@@ -66,14 +65,15 @@ class GoalAdmissionRecoveryTests(HookControlRuntimeCase):
                     self.assert_blocked(await handle_host_hook(host, self.socket_path, event))
                 self.assertEqual(self.governance.action_gate.calls, [])
 
-    async def test_native_admission_reasons_survive_rpc_to_both_host_errors(self):
-        from atellagent_client.integrations.agents.native_rejection_reasons import NATIVE_REJECTION_MESSAGES
+    async def test_native_admission_reasons_survive_rpc_to_both_host_denials(self):
+        from atellagent_client.integrations.agents.native_rejection_reasons import (
+            NATIVE_ADMISSION_REJECTION_CODES, NATIVE_REJECTION_MESSAGES,
+        )
 
         for host in ('codex', 'claude-code'):
-            for reason in ('native_profile_argument_type_unsupported', 'native_hook_adapter_mismatch'):
+            for reason in sorted(NATIVE_REJECTION_MESSAGES):
                 with self.subTest(host=host, reason=reason):
-                    code = ('native_host_action_unclassified'
-                            if reason == 'native_profile_argument_type_unsupported' else reason)
+                    code = reason if reason in NATIVE_ADMISSION_REJECTION_CODES else 'native_host_action_unclassified'
                     failure = self.gateway_failure(403, {
                         'code': code, 'reason_code': reason, 'message': 'PRIVATE_DIAGNOSTIC',
                     })
@@ -86,9 +86,76 @@ class GoalAdmissionRecoveryTests(HookControlRuntimeCase):
                                        if host == 'codex' else {'file_path': 'fixture'}),
                     }
                     response = await handle_host_hook(host, self.socket_path, event)
-                    self.assertEqual(response.exit_code, 2)
-                    self.assertEqual(response.stderr, NATIVE_REJECTION_MESSAGES[reason])
-                    self.assertNotIn('PRIVATE', response.stderr)
+                    self.assertEqual(response.exit_code, 0)
+                    self.assertEqual(response.stderr, '')
+                    self.assertEqual(json.loads(response.stdout), {'hookSpecificOutput': {
+                        'hookEventName': 'PreToolUse', 'permissionDecision': 'deny',
+                        'permissionDecisionReason': NATIVE_REJECTION_MESSAGES[reason],
+                    }})
+                    self.assertNotIn('PRIVATE', response.stdout)
+        self.assertEqual(self.governance.action_gate.calls, [])
+
+    async def test_actual_launcher_worker_rpc_preserves_native_admission_json_denial(self):
+        for host, tool, arguments in (
+            ('codex', 'view_image', {'path': r'C:\fixture.png', 'detail': 'high'}),
+            ('claude-code', 'Read', {'file_path': r'C:\fixture.txt', 'limit': 1}),
+        ):
+            with self.subTest(host=host):
+                self.governance.preflight_async = AsyncMock(side_effect=self.gateway_failure(403, {
+                    'code': 'native_host_action_unclassified',
+                    'reason_code': 'native_profile_path_ambiguous', 'message': 'PRIVATE_DIAGNOSTIC',
+                }))
+                event = {'hook_event_name': 'PreToolUse', 'session_id': 'native-denial-launcher',
+                    'tool_use_id': host + '-image-read', 'tool_name': tool, 'tool_input': arguments}
+                child = await asyncio.create_subprocess_exec(
+                    sys.executable, '-m', 'atellagent_client.hook_launcher',
+                    '--host', host, '--socket', self.socket_path,
+                    stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                try:
+                    stdout, stderr = await asyncio.wait_for(child.communicate(json.dumps(event).encode()), timeout=8)
+                finally:
+                    if child.returncode is None:
+                        child.kill()
+                        await child.wait()
+                self.assertEqual(child.returncode, 0)
+                self.assertEqual(stderr, b'')
+                self.assertEqual(json.loads(stdout), {'hookSpecificOutput': {
+                    'hookEventName': 'PreToolUse', 'permissionDecision': 'deny',
+                    'permissionDecisionReason': 'Atellagent could not determine an unambiguous requested path; request denied.',
+                }})
+                self.assertNotIn(b'PRIVATE', stdout)
+        self.assertEqual(self.governance.action_gate.calls, [])
+
+    async def test_actual_launcher_worker_rpc_structures_operational_refusals(self):
+        for host in ('codex', 'claude-code'):
+            for status, detail in (
+                (503, {}),
+                (401, {'code': 'local_host_authorization_revoked'}),
+                (429, {'error': 'entitlement_denied', 'code': 'governed_action_decision_quota_exhausted'}),
+            ):
+                with self.subTest(host=host, status=status):
+                    self.governance.preflight_async = AsyncMock(side_effect=self.gateway_failure(status, detail))
+                    payload = {'hook_event_name': 'PreToolUse', 'session_id': 'operational-denial-launcher',
+                               'tool_use_id': host+'-'+str(status), 'tool_name': 'Read',
+                               'tool_input': {'file_path': 'synthetic-fixture'}}
+                    child = await asyncio.create_subprocess_exec(
+                        sys.executable, '-m', 'atellagent_client.hook_launcher',
+                        '--host', host, '--socket', self.socket_path,
+                        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE)
+                    try:
+                        stdout, stderr = await asyncio.wait_for(child.communicate(json.dumps(payload).encode()), timeout=8)
+                    finally:
+                        if child.returncode is None:
+                            child.kill()
+                            await child.wait()
+                    self.assertEqual(child.returncode, 0)
+                    self.assertEqual(stderr, b'')
+                    body = json.loads(stdout)['hookSpecificOutput']
+                    self.assertEqual((body['hookEventName'], body['permissionDecision']), ('PreToolUse', 'deny'))
+                    self.assertNotIn('policy denied', body['permissionDecisionReason'])
         self.assertEqual(self.governance.action_gate.calls, [])
 
     async def test_authored_policy_envelopes_win_over_all_admission_hints(self):
@@ -237,6 +304,8 @@ class GoalAdmissionRecoveryTests(HookControlRuntimeCase):
             self.assertEqual(stderr, b'')
         self.governance.preflight_async = AsyncMock(side_effect=quota)
         code, stdout, stderr = await launch(self.event(tool='view_image'))
-        self.assertEqual(code, 2)
-        self.assertEqual(stdout, b'')
-        self.assertIn(b'allowance is exhausted', stderr)
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, b'')
+        output = json.loads(stdout)['hookSpecificOutput']
+        self.assertEqual(output['permissionDecision'], 'deny')
+        self.assertIn('allowance is exhausted', output['permissionDecisionReason'])

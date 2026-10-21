@@ -9,6 +9,17 @@ import pytest
 from atellagent_client import hook_launcher as launcher
 
 
+def assert_failure(code, out, err, *, host="claude-code", event=None, reason=None):
+    expected = launcher._FAILURE if reason is None else reason
+    if host in {"codex", "claude-code"} and (event or {"hook_event_name":"PreToolUse"}).get("hook_event_name") == "PreToolUse":
+        assert code == 0 and err == b""
+        assert json.loads(out) == {"hookSpecificOutput": {"hookEventName":"PreToolUse",
+            "permissionDecision":"deny", "permissionDecisionReason":expected}}
+    else:
+        assert code == 2 and out == b""
+        assert err.decode().strip() == expected
+
+
 def run_launcher(monkeypatch, tmp_path, code, *, host="claude-code", event=None):
     (tmp_path / "controlled_adapter.py").write_text("def main():\n" + indent(code, "    "))
     payload = json.dumps(event or {"hook_event_name":"PreToolUse", "tool_name":"Read", "tool_input":{},
@@ -29,8 +40,7 @@ def run_launcher(monkeypatch, tmp_path, code, *, host="claude-code", event=None)
 @pytest.mark.parametrize("host", ["codex","claude-code","gemini-cli"])
 def test_real_child_syntax_failure_blocks_without_leaking_traceback(monkeypatch,tmp_path,host):
     code,out,err,_ = run_launcher(monkeypatch,tmp_path,"if True:\n",host=host)
-    assert code == 2 and out == b""
-    assert err.decode().strip() == launcher._FAILURE
+    assert_failure(code,out,err,host=host)
     assert b"SyntaxError" not in err
 
 
@@ -49,7 +59,8 @@ def test_exact_codex_goal_recovers_on_child_startup_failure(monkeypatch,tmp_path
 def test_malformed_goal_never_escapes_failed_child(monkeypatch,tmp_path,changes):
     event={"hook_event_name":"PreToolUse","tool_name":"update_goal","tool_input":{"status":"blocked"},
            "session_id":"synthetic","tool_use_id":"synthetic-call",**changes}
-    assert run_launcher(monkeypatch,tmp_path,"if True:\n",host="codex",event=event)[0]==2
+    code,out,err,_=run_launcher(monkeypatch,tmp_path,"if True:\n",host="codex",event=event)
+    assert_failure(code,out,err,host="codex",event=event)
 
 
 def test_healthy_goal_policy_deny_is_preserved(monkeypatch,tmp_path):
@@ -66,16 +77,18 @@ def test_healthy_adapter_receives_exact_input_bytes(monkeypatch,tmp_path):
     assert (code,out,err)==(0,payload,b"")
 
 
-def test_documented_blocking_auth_reason_is_preserved(monkeypatch,tmp_path):
+def test_legacy_worker_error_uses_explicit_generic_pretool_denial(monkeypatch,tmp_path):
     message=b'Atellagent sign-in is required; request denied.\n'
     code,out,err,_=run_launcher(monkeypatch,tmp_path,
         "import sys\nsys.stderr.buffer.write("+repr(message)+")\nraise SystemExit(2)\n")
-    assert (code,out,err)==(2,b"",message)
+    # An error exit is no longer trusted as a safe, phase-specific decision.
+    assert_failure(code,out,err)
 
 
 def test_private_unexpected_child_failure_is_not_exposed(monkeypatch,tmp_path):
     code,out,err,_=run_launcher(monkeypatch,tmp_path,"print('synthetic-private-value')\nraise RuntimeError('synthetic-secret')\n")
-    assert code==2 and out==b"" and b"synthetic-secret" not in err and b"synthetic-private-value" not in err
+    assert_failure(code,out,err)
+    assert b"synthetic-secret" not in out+err and b"synthetic-private-value" not in out+err
 
 
 @pytest.mark.parametrize("goal", [False, True])
@@ -85,14 +98,17 @@ def test_real_child_timeout_blocks_tools_but_releases_exact_goal(monkeypatch,tmp
            "tool_input":{"status":"blocked"} if goal else {},
            "session_id":"synthetic","tool_use_id":"synthetic-call"}
     code,out,err,_=run_launcher(monkeypatch,tmp_path,"import time\ntime.sleep(30)\n",host="codex",event=event)
-    assert code==(0 if goal else 2) and out==b""
-    assert err==(b"" if goal else (launcher._PRETOOL_TIMEOUT_FAILURE+"\n").encode())
+    if goal:
+        assert (code,out,err)==(0,b"",b"")
+    else:
+        assert_failure(code,out,err,host="codex",event=event,reason=launcher._PRETOOL_TIMEOUT_FAILURE)
 
 
 def test_claude_never_uses_codex_goal_recovery(monkeypatch,tmp_path):
     event={"hook_event_name":"PreToolUse","tool_name":"update_goal","tool_input":{"status":"blocked"},
            "session_id":"synthetic","tool_use_id":"synthetic-call"}
-    assert run_launcher(monkeypatch,tmp_path,"if True:\n",event=event)[0]==2
+    code,out,err,_=run_launcher(monkeypatch,tmp_path,"if True:\n",event=event)
+    assert_failure(code,out,err,event=event)
 
 
 def test_deep_invalid_goal_json_is_not_an_unhandled_launcher_error():
@@ -130,7 +146,11 @@ def test_exact_goal_preserves_documented_worker_block(monkeypatch, tmp_path, sta
         "sys.stderr.buffer.write(" + repr(message) + ")\nraise SystemExit(2)\n",
         host="codex", event=event,
     )
-    assert (code, out, err) == (2, b"", message)
+    if checkpoint == "PreToolUse":
+        assert_failure(code,out,err,host="codex",event=event)
+        assert b"discard partial output" not in out
+    else:
+        assert (code,out,err)==(2,b"",message)
 
 
 @pytest.mark.parametrize("host,checkpoint", [
@@ -145,10 +165,10 @@ def test_real_worker_deadline_explains_pretool_denial_without_partial_output(mon
         "import sys, time\nsys.stdout.write('private-partial-allow')\nsys.stdout.flush()\n"
         "sys.stderr.write('private-worker-detail')\nsys.stderr.flush()\ntime.sleep(30)\n",
         host=host, event=event)
-    assert code == 2 and out == b""
-    assert b"preflight timed out" in err and b"tool was not executed" in err
-    assert b"unchanged tool call once" in err
-    assert b"private" not in err and b"policy denied" not in err
+    assert_failure(code,out,err,host=host,event=event,reason=launcher._PRETOOL_TIMEOUT_FAILURE)
+    assert b"preflight timed out" in out+err and b"tool was not executed" in out+err
+    assert b"unchanged tool call once" in out+err
+    assert b"private" not in out+err and b"policy denied" not in out+err
 
 
 @pytest.mark.parametrize("host,checkpoint", [

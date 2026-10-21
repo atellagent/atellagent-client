@@ -72,6 +72,30 @@ def _goal_recovery(host: str, payload: bytes) -> bool:
     )
 
 
+def _pretool_denial(host: str, payload: bytes, reason: str) -> bytes | None:
+    if host not in {"codex", "claude-code"}:
+        return None
+    try:
+        event = json.loads(payload)
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return None
+    if not isinstance(event, dict) or event.get("hook_event_name") != "PreToolUse":
+        return None
+    return json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse", "permissionDecision": "deny",
+        "permissionDecisionReason": reason,
+    }}, separators=(",", ":")).encode() + b"\n"
+
+
+def _emit_failure(host: str, payload: bytes, reason: str) -> None:
+    denial = _pretool_denial(host, payload, reason)
+    if denial is not None:
+        sys.stdout.buffer.write(denial)
+        raise SystemExit(0)
+    print(reason, file=sys.stderr)
+    raise SystemExit(2)
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Atellagent guarded command hook")
     parser.add_argument("--host", required=True, choices=("codex", "claude-code", "gemini-cli"))
@@ -103,9 +127,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         sys.stderr.buffer.write(child.stderr)
         raise SystemExit(0)
     if child is not None and child.returncode == 2:
-        # The worker completed with an explicit blocking result. Goal recovery
-        # from controller outages is handled inside that worker; preserve its
-        # policy, directive and malformed-input refusals without partial stdout.
+        # A completed worker refusal remains a refusal, including for goals.
+        # The ordinary worker handles operational goal recovery. Pre-tool
+        # refusals need an explicit denial; partial output is never forwarded.
+        denial = _pretool_denial(args.host, payload, _FAILURE)
+        if denial is not None:
+            # A failed worker supplies no trusted pre-tool decision or safe
+            # partial output. Explicitly deny without echoing its diagnostics.
+            sys.stdout.buffer.write(denial)
+            raise SystemExit(0)
         sys.stderr.buffer.write(child.stderr)
         raise SystemExit(2)
     if _goal_recovery(args.host, payload):
@@ -113,9 +143,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         # overriding a documented refusal from a functioning worker.
         raise SystemExit(0)
     # Never expose a Python traceback, partial stdout, or raw input from a
-    # failed child. Exit two is the host's blocking startup-failure contract.
-    print(_timeout_failure(payload) if timed_out else _FAILURE, file=sys.stderr)
-    raise SystemExit(2)
+    # failed child. Recognized pre-tool failures use the explicit denial path.
+    _emit_failure(args.host, payload, _timeout_failure(payload) if timed_out else _FAILURE)
 
 
 if __name__ == "__main__":

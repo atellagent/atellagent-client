@@ -764,6 +764,7 @@ PUBLIC_SOURCE_PATHS = (
     "sdk/certificate_lifecycle.py",
     "tests/test_certificate_lifecycle.py",
     "tests/test_onboarding_json_transport.py",
+    "tests/test_pretool_failure_contract.py",
 )
 
 # Public source may import the standard library, this package, or the direct
