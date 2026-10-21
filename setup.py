@@ -7,7 +7,9 @@ from setuptools import setup
 from setuptools.command.build_py import build_py as _build_py
 from setuptools.command.sdist import sdist as _sdist
 import os
+import re
 import shutil
+from urllib.parse import urljoin, urlsplit
 
 PACKAGE_ROOT = os.path.abspath(os.path.dirname(__file__))
 
@@ -26,6 +28,23 @@ with open(version_path, "r", encoding="utf-8") as fh:
 readme_path = os.path.join(PACKAGE_ROOT, "README.md")
 with open(readme_path, "r", encoding="utf-8") as fh:
     long_description = fh.read()
+
+# Package descriptions are rendered outside GitHub. Keep repository-relative
+# README links convenient in source while publishing version-pinned absolute URLs.
+_description_docs_base = (
+    "https://github.com/atellagent/atellagent-client/blob/"
+    f"v{version_namespace['CLIENT_LIBRARY_VERSION']}/"
+)
+
+
+def _absolute_description_link(match):
+    target = match.group(1)
+    if urlsplit(target).scheme or target.startswith(("#", "//")):
+        return match.group(0)
+    return f"]({urljoin(_description_docs_base, target)})"
+
+
+long_description = re.sub(r"\]\(([^)\s]+)\)", _absolute_description_link, long_description)
 
 # The client repository is also the package root.  Public packages are listed
 # explicitly: adding a source directory must never silently make it into a

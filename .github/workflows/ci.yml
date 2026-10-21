@@ -28,7 +28,7 @@ jobs:
       - name: Install the Windows client regression prerequisites
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip==24.0
+          python -m pip install --upgrade 'pip @ https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl#sha256=fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip install --constraint requirements/constraints-py311.lock pytest==9.1.1 pytest-asyncio==1.4.0
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -138,7 +138,7 @@ jobs:
 
       - name: Install the locked public runtime and documented extras
         run: |
-          python -m pip install --upgrade pip==24.0
+          python -m pip install --upgrade 'pip @ https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl#sha256=fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70'
           python -m pip install --constraint requirements/constraints-py311.lock pytest==9.1.1 pytest-asyncio==1.4.0
           python -m pip install --constraint requirements/constraints-py311.lock langchain==1.0.0
           pip install --constraint requirements/constraints-py311.lock '.[test,mcp-agent-proxy,mcp-tool-proxy]'
@@ -284,10 +284,16 @@ jobs:
             test ! -e /src
             test ! -e /tests
             test ! -d /root/.cache
+            test ! -d /usr/local/lib/python3.11/ensurepip
             test -f /licenses/LICENSE.md
             test -f /licenses/THIRD_PARTY_NOTICES.md
             test "$(id -u)" = 10001
             atellagent-cli --help >/dev/null
+          '
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user 10001:10001 --entrypoint python3 atellagent-client:inspect -c '
+          import hashlib, ssl
+          blocked = "86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b"
+          assert all(hashlib.sha256(cert).hexdigest() != blocked for cert in ssl.create_default_context().get_ca_certs(binary_form=True)), "compromised CA remains trusted"
           '
 
   container-platform-scan:
@@ -398,8 +404,14 @@ jobs:
           wheel=$(find dist -maxdepth 1 -name 'atellagent_client-*.whl' -print -quit)
           test "$(sha256sum "$wheel" | awk '{print $1}')" = '${{ needs.public-release-boundary.outputs.wheel_sha256 }}'
           if docker buildx imagetools inspect "$image:$version" >/dev/null 2>&1; then
-            echo "exact image version already exists: $image:$version" >&2
-            exit 1
+            existing_digest=$(docker buildx imagetools inspect "$image:$version" | awk '$1 == "Digest:" {digest=$2} END {print digest}')
+            # One owner-authorized correction of the initial 0.9.1 publication.
+            # Once replaced, its digest changes and this exception cannot recur.
+            if [[ "$version" != "0.9.1" || "$existing_digest" != "sha256:cbac3ff0b051aeb0d5dc0f1ee43adf5f26202b65dfc98e21e0887de1e1c38083" ]]; then
+              echo "exact image version already exists: $image:$version" >&2
+              exit 1
+            fi
+            echo "Replacing the initial 0.9.1 publication at the owner's request."
           fi
           major=${version%%.*}
           minor=${version%.*}

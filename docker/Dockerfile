@@ -47,6 +47,10 @@ RUN test -n "$CLIENT_VERSION" \
     && test "$(find /tmp -maxdepth 1 -type f -name 'atellagent_client-*.whl' | wc -l)" -eq 1 \
     && wheel=$(find /tmp -maxdepth 1 -type f -name 'atellagent_client-*.whl' -print -quit) \
     && test "$CLIENT_WHEEL_SHA256" = "$(sha256sum "$wheel" | awk '{print $1}')" \
+    && rm -f /usr/share/ca-certificates/mozilla/emSign_ECC_Root_CA_-_G3.crt \
+    && sed -i '\|^mozilla/emSign_ECC_Root_CA_-_G3.crt$|d' /etc/ca-certificates.conf \
+    && update-ca-certificates --fresh \
+    && python -m pip install --no-deps 'pip @ https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl#sha256=fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70' \
     && pip install --no-deps "$wheel" \
     && pip install --only-binary=:all: --require-hashes -r /tmp/container-core-py311.lock \
     && pip check \
@@ -61,7 +65,8 @@ RUN test -n "$CLIENT_VERSION" \
       /usr/local/lib/python3.11/site-packages/wheel \
       /usr/local/lib/python3.11/site-packages/wheel-*.dist-info \
       /usr/local/lib/python3.11/site-packages/packaging \
-      /usr/local/lib/python3.11/site-packages/packaging-*.dist-info
+      /usr/local/lib/python3.11/site-packages/packaging-*.dist-info \
+      /usr/local/lib/python3.11/ensurepip
 
 # The image contains no listener. Runtime state must be supplied through the
 # documented writable identity/runtime mounts and a tmpfs at /tmp.
