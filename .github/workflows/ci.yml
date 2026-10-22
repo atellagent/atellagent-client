@@ -219,9 +219,9 @@ jobs:
 
       - name: Smoke test the installed wheel outside the checkout
         run: |
-          python -m venv /tmp/atellagent-client-wheel-test
+          python -m venv --without-pip /tmp/atellagent-client-wheel-test
           wheel_path=$(echo "$GITHUB_WORKSPACE"/dist/*.whl)
-          /tmp/atellagent-client-wheel-test/bin/pip install --constraint "$GITHUB_WORKSPACE/requirements/constraints-py311.lock" "${wheel_path}[test,mcp-agent-proxy,mcp-tool-proxy]"
+          python -m pip --python /tmp/atellagent-client-wheel-test/bin/python install --constraint "$GITHUB_WORKSPACE/requirements/constraints-py311.lock" "${wheel_path}[test,mcp-agent-proxy,mcp-tool-proxy]"
           cd /tmp
           /tmp/atellagent-client-wheel-test/bin/python -c 'import atellagent_client; assert atellagent_client.__version__'
           /tmp/atellagent-client-wheel-test/bin/atellagent-cli --help >/dev/null
@@ -231,9 +231,9 @@ jobs:
 
       - name: Verify the standard client install has no MCP SDK dependency
         run: |
-          python -m venv /tmp/atellagent-client-standard-test
+          python -m venv --without-pip /tmp/atellagent-client-standard-test
           wheel_path=$(echo "$GITHUB_WORKSPACE"/dist/*.whl)
-          /tmp/atellagent-client-standard-test/bin/pip install --constraint "$GITHUB_WORKSPACE/requirements/constraints-py311.lock" "$wheel_path"
+          python -m pip --python /tmp/atellagent-client-standard-test/bin/python install --constraint "$GITHUB_WORKSPACE/requirements/constraints-py311.lock" "$wheel_path"
           cd /tmp
           ! /tmp/atellagent-client-standard-test/bin/python -c 'import mcp'
           /tmp/atellagent-client-standard-test/bin/atellagent-cli discover --json | /tmp/atellagent-client-standard-test/bin/python -c 'import json, sys; result = json.load(sys.stdin); assert result["read_only"] is True and {item["host"] for item in result["hosts"]} == {"codex", "claude-code"}'
@@ -404,14 +404,8 @@ jobs:
           wheel=$(find dist -maxdepth 1 -name 'atellagent_client-*.whl' -print -quit)
           test "$(sha256sum "$wheel" | awk '{print $1}')" = '${{ needs.public-release-boundary.outputs.wheel_sha256 }}'
           if docker buildx imagetools inspect "$image:$version" >/dev/null 2>&1; then
-            existing_digest=$(docker buildx imagetools inspect "$image:$version" | awk '$1 == "Digest:" {digest=$2} END {print digest}')
-            # One owner-authorized correction of the initial 0.9.1 publication.
-            # Once replaced, its digest changes and this exception cannot recur.
-            if [[ "$version" != "0.9.1" || "$existing_digest" != "sha256:cbac3ff0b051aeb0d5dc0f1ee43adf5f26202b65dfc98e21e0887de1e1c38083" ]]; then
-              echo "exact image version already exists: $image:$version" >&2
-              exit 1
-            fi
-            echo "Replacing the initial 0.9.1 publication at the owner's request."
+            echo "exact image version already exists: $image:$version" >&2
+            exit 1
           fi
           major=${version%%.*}
           minor=${version%.*}
