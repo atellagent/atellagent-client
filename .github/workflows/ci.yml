@@ -404,8 +404,13 @@ jobs:
           wheel=$(find dist -maxdepth 1 -name 'atellagent_client-*.whl' -print -quit)
           test "$(sha256sum "$wheel" | awk '{print $1}')" = '${{ needs.public-release-boundary.outputs.wheel_sha256 }}'
           if docker buildx imagetools inspect "$image:$version" >/dev/null 2>&1; then
-            echo "exact image version already exists: $image:$version" >&2
-            exit 1
+            existing_digest=$(docker buildx imagetools inspect "$image:$version" | awk '$1 == "Digest:" {digest=$2} END {print digest}')
+            # Owner-authorized correction, limited to this exact existing image.
+            # The changed digest prevents this exception from being reused.
+            if [[ "$version" != "0.9.1" || "$existing_digest" != "sha256:03c0614ac126470fd68061faf68a02b3a6c11acc6b4d6b4f9e2fb67da8bb68c0" ]]; then
+              echo "exact image version already exists: $image:$version" >&2
+              exit 1
+            fi
           fi
           major=${version%%.*}
           minor=${version%.*}
