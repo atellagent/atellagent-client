@@ -39,6 +39,8 @@ COPY LICENSE.md THIRD_PARTY_NOTICES.md /licenses/
 # The pinned base includes Debian security updates for OpenSSL, Perl and PCRE2.
 # Native components bundled by Python wheels are inventoried after installation.
 COPY security/native_components.py /tmp/native_components.py
+COPY security/verify_public_trust.py /tmp/verify_public_trust.py
+COPY security/incident-chains/ /tmp/incident-chains/
 
 RUN test -n "$CLIENT_VERSION" \
     && test -n "$VCS_REF" \
@@ -47,8 +49,9 @@ RUN test -n "$CLIENT_VERSION" \
     && test "$(find /tmp -maxdepth 1 -type f -name 'atellagent_client-*.whl' | wc -l)" -eq 1 \
     && wheel=$(find /tmp -maxdepth 1 -type f -name 'atellagent_client-*.whl' -print -quit) \
     && test "$CLIENT_WHEEL_SHA256" = "$(sha256sum "$wheel" | awk '{print $1}')" \
-    && rm -f /usr/share/ca-certificates/mozilla/emSign_ECC_Root_CA_-_G3.crt \
+    && rm -f /usr/share/ca-certificates/mozilla/emSign_ECC_Root_CA_-_G3.crt /usr/share/ca-certificates/mozilla/Comodo_AAA_Services_root.crt \
     && sed -i '\|^mozilla/emSign_ECC_Root_CA_-_G3.crt$|d' /etc/ca-certificates.conf \
+    && sed -i '\|^mozilla/Comodo_AAA_Services_root.crt$|d' /etc/ca-certificates.conf \
     && update-ca-certificates --fresh \
     && python -m pip install --no-deps 'pip @ https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl#sha256=fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70' \
     && pip install --no-deps "$wheel" \
@@ -67,6 +70,10 @@ RUN test -n "$CLIENT_VERSION" \
       /usr/local/lib/python3.11/site-packages/packaging \
       /usr/local/lib/python3.11/site-packages/packaging-*.dist-info \
       /usr/local/lib/python3.11/ensurepip
+
+# Reject every published compromised TLS chain, including Sectigo cross-signs.
+RUN python /tmp/verify_public_trust.py --chains-directory /tmp/incident-chains \
+    && rm -rf /tmp/verify_public_trust.py /tmp/incident-chains
 
 # The image contains no listener. Runtime state must be supplied through the
 # documented writable identity/runtime mounts and a tmpfs at /tmp.
