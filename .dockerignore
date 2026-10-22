@@ -10,5 +10,8 @@
 !requirements/container-core-py311.lock
 !security/
 !security/native_components.py
+!security/verify_public_trust.py
+!security/incident-chains/
+!security/incident-chains/*.pem
 !LICENSE.md
 !THIRD_PARTY_NOTICES.md

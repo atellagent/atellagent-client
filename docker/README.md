@@ -81,18 +81,33 @@ uses its approved machine identity, not the setup user's browser session.
 Customer extras and adapters belong in a separate image pinned to the base
 digest. The base release stays core-only.
 
+The runtime omits pip and build tools. Build dependencies separately, then copy
+only their installed files into the final image. Lock the complete dependency
+closure with hashes and versions compatible with the base client's dependencies.
+
 ```dockerfile
-FROM ghcr.io/atellagent/atellagent-client@sha256:<manifest-digest>
+# syntax=docker/dockerfile:1.10
+ARG CLIENT_IMAGE=ghcr.io/atellagent/atellagent-client@sha256:<manifest-digest>
+FROM ${CLIENT_IMAGE} AS dependencies
 USER root
+ADD --checksum=sha256:fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70 https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl /tmp/pip.whl
 COPY customer-requirements.lock /tmp/customer-requirements.lock
-RUN pip install --require-hashes --only-binary=:all: -r /tmp/customer-requirements.lock \
-    && rm -rf /tmp/customer-requirements.lock /root/.cache
+RUN PYTHONPATH=/tmp/pip.whl python -m pip install --require-hashes \
+    --only-binary=:all: --ignore-installed --prefix=/opt/customer \
+    -r /tmp/customer-requirements.lock \
+    && PYTHONPATH=/tmp/pip.whl:/opt/customer/lib/python3.11/site-packages python -m pip check
+
+FROM ${CLIENT_IMAGE}
+COPY --from=dependencies /opt/customer/ /usr/local/
 COPY --chown=10001:10001 customer_runtime.py /customer/customer_runtime.py
+ENV PYTHONPATH=/customer
 USER 10001:10001
 ```
 
-Build and scan a derived image in the customer's release process. Its
-identity and customer settings stay separate from the image.
+Build and scan a derived image in the customer's release process. Its final
+image retains the base entrypoint and has no pip. Keep identity and customer
+settings separate from the image. Do not include pip, setuptools or other build
+tools in the customer runtime lock unless your runtime explicitly requires them.
 
 ## Compose and Kubernetes hardening
 

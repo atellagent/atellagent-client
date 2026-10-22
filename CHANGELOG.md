@@ -13,6 +13,12 @@ Copyright (c) 2026 Atellagent, Inc. All rights reserved. See [LICENSE.md](http:/
 
 ## 0.9.1
 
+- Remove the AAA cross-sign trust path for the compromised eMudhra CAs from the
+  portable image. Reject all twelve published incident chains in an offline
+  image-build check, preserving other public roots.
+- Use patched outer pip for CI's isolated wheel installs, repair the derived
+  image example and document host installation trust prerequisites.
+
 - Corrected package-description links for PyPI and updated pip bootstrap to the
   hash-verified security release; removed the compromised emSign G3 root from
   container system trust and removed bundled ensurepip from the runtime.
