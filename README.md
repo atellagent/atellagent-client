@@ -23,6 +23,8 @@ Install the core client for CPython 3.11:
 pip install atellagent-client
 ```
 
+Check the [installation trust prerequisites](COMPATIBILITY.md#installation-trust-prerequisites) before installing.
+
 Install only the provider extra used by a customer adapter, for example
 `atellagent-client[openai]`, `atellagent-client[google]`, or
 `atellagent-client[anthropic]`. See the [documentation index](docs/README.md)
