@@ -26,7 +26,6 @@ upstream source repository and is identified as such in their entries.
 | charset-normalizer | 3.4.9 | MIT |
 | click | 8.4.2 | BSD-3-Clause |
 | cryptography | 50.0.2 | Apache-2.0 OR BSD-3-Clause |
-| OpenSSL (cryptography Linux wheels) | 4.0.3 | Apache-2.0 |
 | distro | 1.9.0 | Apache License, Version 2.0 |
 | docstring_parser | 0.18.0 | MIT |
 | filelock | 3.32.2 | MIT |
@@ -112,6 +111,17 @@ upstream source repository and is identified as such in their entries.
 | xxhash | 3.6.0 | BSD |
 | zipp | 4.1.0 | MIT |
 | zstandard | 0.25.0 | BSD-3-Clause |
+
+---
+
+## Bundled native component summary
+
+These components are embedded in the pinned Python distributions rather than
+installed as separate Python packages. Their full license texts appear below.
+
+| Component | Version | License |
+|---|---|---|
+| OpenSSL (cryptography Linux wheels) | 4.0.3 | Apache-2.0 |
 
 ---
 

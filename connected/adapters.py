@@ -255,36 +255,19 @@ def mount_mcp_handler(
     consequential: bool,
     target_idempotent: bool,
 ) -> None:
-    """Mount a local MCP adapter that must accept the stable idempotency key."""
+    from .mcp_handler import execute_mcp_handler, prepare_mcp_request
+    mode = _target_mode(consequential=consequential, target_idempotent=target_idempotent)
+    if participant._mcp_handler is not None:
+        raise ValueError("an MCP handler is already mounted")
 
-    async def invoke(
-        delivery: ConnectedDelivery, _actions: ConnectedActionClient
-    ) -> ConnectedHandlerResult:
-        request = _object(delivery.payload.get("request"), "MCP request")
-        params = _object(request.get("params"), "MCP tools/call params")
-        tool_name = str(params.get("name") or "").strip()
-        arguments = _object(params.get("arguments", {}), "MCP tool arguments")
-        if not tool_name:
-            raise ValueError("MCP tools/call requires a tool name")
-        await participant.enforce_local_action(
-            action=tool_name,
-            correlation_id=delivery.message_id,
-            facts=_local_mcp_facts(tool_name, arguments),
-        )
-        response = await _await(handler(request, delivery.idempotency_key))
-        return ConnectedHandlerResult.succeeded(
-            result_schema="atellagent.connected.mcp-result.v1",
-            result_payload={"mcp_response": _object(response, "MCP response")},
-        )
+    async def invoke(delivery: ConnectedDelivery, _actions: ConnectedActionClient) -> ConnectedHandlerResult:
+        request = prepare_mcp_request(participant, delivery.payload.get("request"))
+        response = await execute_mcp_handler(participant, handler, request, delivery.idempotency_key, correlation_id=delivery.message_id)
+        return ConnectedHandlerResult.succeeded(result_schema="atellagent.connected.mcp-result.v1",
+            result_payload={"mcp_response": response})
 
-    participant.register_handler(
-        "mcp.*",
-        invoke,
-        consequential=consequential,
-        idempotency_mode=_target_mode(
-            consequential=consequential, target_idempotent=target_idempotent
-        ),
-    )
+    participant.register_handler("mcp.*", invoke, consequential=consequential, idempotency_mode=mode)
+    participant._mcp_handler = handler
 
 
 def _workflow_request(delivery: ConnectedDelivery) -> Dict[str, Any]:

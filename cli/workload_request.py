@@ -11,6 +11,7 @@ async def request_workload(context, args):
     if deadline is None and args.offline_dispatch_mode == "queue": deadline = 300
     proposal = WorkloadProposal(uuid4(), args.name, args.account_type, args.packaging,
         tuple(args.capability), identity_mode=args.identity_mode, control_source=args.control_source,
+        allow_direct_mcp_clients=args.allow_direct_mcp_clients,
         local_guardrail_mode=args.local_guardrail_mode, offline_dispatch_mode=args.offline_dispatch_mode,
         offline_dispatch_deadline_seconds=deadline, channel_type=args.channel_type,
         filter_execution_boundary=args.filter_execution_boundary)

@@ -19,6 +19,7 @@ class WorkloadProposal:
     capabilities: tuple[str, ...]
     identity_mode: str | None = None
     control_source: str = "cluster_directive"
+    allow_direct_mcp_clients: bool = False
     local_guardrail_mode: str | None = None
     offline_dispatch_mode: str = "queue"
     offline_dispatch_deadline_seconds: int | None = 300
@@ -28,6 +29,11 @@ class WorkloadProposal:
     device_onboarding_session_id: UUID | None = None
 
     def __post_init__(self):
+        if type(self.allow_direct_mcp_clients) is not bool:
+            raise ValueError("allow_direct_mcp_clients must be a boolean")
+        if self.allow_direct_mcp_clients and (self.account_type != "mcp_server"
+                or self.control_source != "cluster_directive"):
+            raise ValueError("Direct MCP clients require a centrally governed MCP server")
         if not isinstance(self.id, UUID):
             raise ValueError("exact workload proposal identity required")
         _plain_text(self.display_name, 128)

@@ -100,6 +100,7 @@ class RuntimeActionGate:
         raw_context: Optional[Mapping[str, Any]] = None,
         workflow_context: Optional[Mapping[str, Any]] = None,
         policy_decision_id: Optional[str] = None,
+        descriptor_binding: Optional[Mapping[str, Any]] = None,
     ) -> None:
         normalized_action = _text(action)
         normalized_integration_type = _text(integration_type)
@@ -120,6 +121,7 @@ class RuntimeActionGate:
             execution_id=_context_value(workflow_context, "execution_id"),
             workspace_id=_context_value(workflow_context, "workspace_id"),
             policy_decision_id=_text(policy_decision_id) or None,
+            descriptor_binding=dict(descriptor_binding) if descriptor_binding is not None else None,
         )
         try:
             directive = None

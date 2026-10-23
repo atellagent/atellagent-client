@@ -9,6 +9,7 @@ they do not broaden the coverage of a host or integration surface.
 | --- | --- |
 | Embed governance in Python I own | [SDK](../sdk/README.md) |
 | Connect a LangChain agent through the public SDK | [LangChain example](LANGCHAIN_AGENT.md) |
+| Protect an MCP server you operate, including direct native-authenticated clients | [Enterprise MCP](ENTERPRISE_MCP.md) |
 | Run an outbound connected participant or private bridge | [Connected runtime](../connected/README.md) |
 | Govern Claude Code or Codex | [External coding hosts](HOST_HOOKS.md) |
 | Install and use the Mac or Windows app | [Desktop app](DESKTOP_APP.md) |

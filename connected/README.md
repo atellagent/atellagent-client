@@ -205,3 +205,11 @@ Never call generation or log input inside measurement.
 
 Atellagent validates model measurements before authorizing generation. If a
 measurement fails, generation is not permitted.
+
+## Protect your MCP server
+
+[Enterprise MCP](../docs/ENTERPRISE_MCP.md) adds a direct intake to the same connected MCP runtime and mounted handler. Your server authenticates callers; Atellagent authorizes each action before
+execution. External MCP traffic is blocked by default. An administrator configures
+**Allow external MCP traffic** during setup or in **Policies → Rules → Connection
+controls**. The **External MCP traffic** shortcut in **Runtimes & Integrations**
+edits the same setting.
