@@ -88,6 +88,8 @@ class ConnectedRuntimeTests(unittest.IsolatedAsyncioTestCase):
         participant = SimpleNamespace(
             enforce_local_action=AsyncMock(),
             register_handler=Mock(),
+            _mcp_handler=None,
+            _mcp_manifest={"tools": [{"name": "file.write"}]},
         )
         customer_handler = AsyncMock(return_value={"jsonrpc": "2.0", "result": {}})
         mount_mcp_handler(

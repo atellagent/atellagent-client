@@ -74,6 +74,7 @@ class ConnectedParticipant(
             if config.control_source == "local_manifest"
             else None
         )
+        self._mcp_handler = None
         self._handlers: Dict[str, ConnectedOperationHandler] = {}
         for operation, registration in (handlers or {}).items():
             if not isinstance(registration, ConnectedOperationHandler):

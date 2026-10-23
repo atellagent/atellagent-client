@@ -473,6 +473,7 @@ PUBLIC_SOURCE_PATHS = (
     "connected/agent_events.py",
     "connected/model_actions.py",
     "connected/adapters.py",
+    "connected/mcp_handler.py",
     "connected/bridge.py",
     "connected/capability.py",
     "connected/contracts.py",
