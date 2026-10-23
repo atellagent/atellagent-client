@@ -77,6 +77,8 @@ class ConnectedCertificateRotationMixin:
         self.session = GatewaySession.from_service_account_config(self.config,
             device_proof_provider=self._device_proof_provider)
         self._validator = ConnectedCapabilityValidator(self.config, self.session)
+        self._mcp_direct_gate = None
+        self._mcp_publication = None
         self._instance_id = None
         await old_session.close_async()
         await self._register()

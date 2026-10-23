@@ -131,6 +131,8 @@ def directive_from_verified_claims(
         or any(character not in "0123456789abcdef" for character in descriptor_digest or "")
     ):
         raise DirectiveValidationError("remote_directive_invalid")
+    if intent.descriptor_binding is not None and descriptor != intent.descriptor_binding:
+        raise DirectiveValidationError("remote_directive_scope_mismatch")
     for attr in ("tenant_id", "execution_id", "workspace_id"):
         # A missing signed scope must not widen an already scoped local intent.
         # Optional scopes remain absent only when both sides are absent.

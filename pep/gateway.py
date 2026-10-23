@@ -43,6 +43,7 @@ class GatewayDirectiveVerifier:
         issuer: Optional[str] = None,
         is_revoked: Optional[Callable[[str], bool]] = None,
         now: Callable[[], float] = time,
+        http_client_manager: Optional[HTTPClientManager] = None,
     ) -> None:
         self._config = config
         self._audience = audience
@@ -50,12 +51,13 @@ class GatewayDirectiveVerifier:
         self._is_revoked = is_revoked or (lambda _directive_id: False)
         self._now = now
         self._seen: set[str] = set()
+        self._seen_expirations: dict[str, int] = {}
         cert = (
             (config.cert_path, config.key_path)
             if config.cert_path and config.key_path
             else None
         )
-        self._http = HTTPClientManager(
+        self._http = http_client_manager or HTTPClientManager(
             timeout=config.timeout,
             cert=cert,
         )
@@ -92,7 +94,11 @@ class GatewayDirectiveVerifier:
             raise
         except Exception as exc:
             raise DirectiveValidationError("remote_directive_invalid") from exc
-        return directive_from_verified_claims(
+        for identifier, expiry in list(self._seen_expirations.items()):
+            if expiry <= int(self._now()):
+                self._seen.discard(identifier)
+                del self._seen_expirations[identifier]
+        directive = directive_from_verified_claims(
             claims,
             intent,
             audience=self._audience,
@@ -101,6 +107,8 @@ class GatewayDirectiveVerifier:
             seen=self._seen,
             now=self._now,
         )
+        self._seen_expirations[directive.directive_id] = directive.expires_at
+        return directive
 
 
 __all__ = ["CONTROL_DIRECTIVE_AUDIENCE", "GatewayDirectiveVerifier"]

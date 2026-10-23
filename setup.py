@@ -474,6 +474,8 @@ PUBLIC_SOURCE_PATHS = (
     "connected/model_actions.py",
     "connected/adapters.py",
     "connected/mcp_handler.py",
+    "connected/mcp_boundary.py",
+    "tests/test_mcp_resource_intake.py",
     "connected/bridge.py",
     "connected/capability.py",
     "connected/contracts.py",

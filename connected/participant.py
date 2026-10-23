@@ -75,6 +75,8 @@ class ConnectedParticipant(
             else None
         )
         self._mcp_handler = None
+        self._mcp_publication = None
+        self._mcp_direct_gate = None
         self._handlers: Dict[str, ConnectedOperationHandler] = {}
         for operation, registration in (handlers or {}).items():
             if not isinstance(registration, ConnectedOperationHandler):
@@ -121,6 +123,21 @@ class ConnectedParticipant(
         self._device_registration_refresher: Optional[Callable[[], Awaitable[None]]] = (
             None
         )
+
+    async def handle_mcp_request(self, request, *, idempotency_key: str, caller=None):
+        """Authorize a native-authenticated direct caller before the mounted tool.
+
+        Read caller from your server's verified OAuth/JWT/session context, never
+        from tool arguments or unverified headers. None records boundary-only
+        attribution. The current server-owned caller-access setting is checked
+        centrally on every admission; no restart or cached client toggle grants
+        access. Consequential handlers must honor the supplied target key.
+        """
+        from .mcp_boundary import handle_direct_mcp_request
+        task = asyncio.create_task(handle_direct_mcp_request(self, request,
+            idempotency_key=idempotency_key, caller=caller))
+        self._track_delivery(task)
+        return await asyncio.shield(task)
 
     def set_device_proof_provider(
         self, provider: Callable[[str, str, Any], Mapping[str, str]]
@@ -216,6 +233,8 @@ class ConnectedParticipant(
             )
             self._session_closed = False
             self._validator = ConnectedCapabilityValidator(self.config, self.session)
+            self._mcp_direct_gate = None
+            self._mcp_publication = None
             if was_started:
                 await self._start_locked()
 

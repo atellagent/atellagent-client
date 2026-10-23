@@ -66,7 +66,7 @@ class ConnectedRegistrationMixin:
                 "expected_previous_manifest_hash": None,
             },
         )
-        _strict_object(
+        publication = _strict_object(
             response.json(),
             {
                 "integration_id",
@@ -77,6 +77,11 @@ class ConnectedRegistrationMixin:
             },
             "MCP descriptor response",
         )
+        if (publication["integration_id"] != self.config.integration_id
+                or type(publication["descriptor_revision"]) is not int or publication["descriptor_revision"] < 1
+                or not isinstance(publication["manifest_hash"], str) or len(publication["manifest_hash"]) != 64):
+            raise ConnectedProtocolError("MCP publication binding mismatch")
+        self._mcp_publication = dict(publication)
 
     async def _ensure_registered(self) -> None:
         if self._instance_id is None and not self._stop_event.is_set():

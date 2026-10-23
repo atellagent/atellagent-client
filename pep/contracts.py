@@ -140,6 +140,7 @@ class ActionIntent:
     raw_action_fingerprint: Optional[str] = None
     policy_decision_id: Optional[str] = None
     raw_context: Dict[str, Any] = field(default_factory=dict)
+    descriptor_binding: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         _text(self.action, "action", required=True)
