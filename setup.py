@@ -476,6 +476,8 @@ PUBLIC_SOURCE_PATHS = (
     "connected/mcp_handler.py",
     "connected/mcp_boundary.py",
     "tests/test_mcp_resource_intake.py",
+    "docs/ENTERPRISE_MCP.md",
+    "examples/mcp/resource_server.py",
     "connected/bridge.py",
     "connected/capability.py",
     "connected/contracts.py",
