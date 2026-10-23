@@ -29,6 +29,7 @@ def options(arguments):
             command.add_argument("--capability", action="append", required=True)
             command.add_argument("--identity-mode", choices=("boundary_identity_only", "federated_agent_identity"))
             command.add_argument("--control-source", choices=("cluster_directive", "local_manifest"), default="cluster_directive")
+            command.add_argument("--allow-direct-mcp-clients", action="store_true", help="Allow native-authenticated direct MCP clients to request central policy authorization")
             command.add_argument("--local-guardrail-mode", choices=("observe", "enforce"))
             command.add_argument("--offline-dispatch-mode", choices=("queue", "fail_immediately"), default="queue")
             command.add_argument("--offline-dispatch-deadline-seconds", type=int)
