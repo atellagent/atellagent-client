@@ -1,0 +1,10 @@
+# Copyright (c) 2026 Atellagent, Inc. All rights reserved.
+# This source code is licensed under the terms found in the LICENSE.md file in the root directory of this source tree.
+
+# Example local MCP adapter configuration for Codex or another supported host.
+#
+# The adapter is credential-free and is not enrolled. `control_socket` must
+# match the owner-private socket of the running Agent Proxy control service.
+# The service fetches its assigned tool catalog from Atellagent; do not put
+# target bindings, tool names, or provider credentials in this file.
+control_socket: /run/user/<uid>/atellagent/control.sock

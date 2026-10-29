@@ -1,0 +1,183 @@
+# Copyright (c) 2026 Atellagent, Inc. All rights reserved.
+# This source code is licensed under the terms found in the LICENSE.md file in the root directory of this source tree.
+
+"""Static release-contract checks for the portable client image."""
+
+from __future__ import annotations
+
+import ast
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import unittest
+
+import yaml
+
+
+class ContainerReleaseContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.root = Path(__file__).resolve().parents[1]
+        cls.dockerfile = (cls.root / "docker/Dockerfile").read_text(encoding="utf-8")
+        cls.dockerignore = (cls.root / ".dockerignore").read_text(encoding="utf-8")
+        cls.workflow = (cls.root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        cls.lock = (cls.root / "requirements/container-core-py311.lock").read_text(
+            encoding="utf-8"
+        )
+        cls.vex = json.loads(
+            (cls.root / "security/vex/python-3.11.17.openvex.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_artifact_first_dockerfile_is_pinned_and_core_only(self) -> None:
+        self.assertFalse((self.root / "docker/Dockerfile.base").exists())
+        self.assertRegex(self.dockerfile, r"FROM python:\d+\.\d+\.\d+-slim-[\w-]+@sha256:[0-9a-f]{64}")
+        self.assertIn("COPY dist/atellagent_client-*.whl /tmp/", self.dockerfile)
+        self.assertIn("COPY requirements/container-core-py311.lock", self.dockerfile)
+        self.assertNotIn("COPY . ", self.dockerfile)
+        self.assertIn("COPY security/native_components.py", self.dockerfile)
+        self.assertIn("/licenses/native-components.spdx.json", self.dockerfile)
+        self.assertIn("--require-hashes", self.dockerfile)
+        self.assertIn("--only-binary=:all:", self.dockerfile)
+        self.assertIn("pip check", self.dockerfile)
+        self.assertIn("site-packages/setuptools", self.dockerfile)
+        self.assertIn("site-packages/pip", self.dockerfile)
+        self.assertIn("site-packages/wheel", self.dockerfile)
+        self.assertIn("io.atellagent.client-wheel-sha256", self.dockerfile)
+        self.assertNotIn("EXPOSE", self.dockerfile)
+        self.assertIn("USER 10001:10001", self.dockerfile)
+        self.assertIn("ATELLAGENT_HOOK_SOCKET", self.dockerfile)
+        self.assertIn('ENTRYPOINT ["atellagent-cli"]', self.dockerfile)
+
+    def test_docker_build_context_is_a_positive_allowlist(self) -> None:
+        lines = {
+            line.strip()
+            for line in self.dockerignore.splitlines()
+            if line.strip() and not line.startswith("#")
+        }
+        self.assertIn("**", lines)
+        self.assertEqual(
+            {line for line in lines if line.startswith("!")},
+            {
+                "!docker/",
+                "!docker/Dockerfile",
+                "!dist/",
+                "!dist/atellagent_client-*.whl",
+                "!requirements/",
+                "!requirements/container-core-py311.lock",
+                "!security/",
+                "!security/native_components.py",
+                "!security/verify_public_trust.py",
+                "!security/incident-chains/",
+                "!security/incident-chains/*.pem",
+                "!LICENSE.md",
+                "!THIRD_PARTY_NOTICES.md",
+            },
+        )
+
+    def test_core_lock_is_fully_hashed_and_matches_runtime_dependencies(self) -> None:
+        entries = [line for line in self.lock.splitlines() if line and not line.startswith(("#", " "))]
+        package_names = {line.split("==", 1)[0].lower() for line in entries}
+        self.assertTrue({"httpx", "h2", "pyyaml", "pyjwt", "cryptography", "keyring", "filelock", "tomlkit"} <= package_names)
+        self.assertGreaterEqual(
+            len(re.findall(r"--hash=sha256:[0-9a-f]{64}", self.lock)),
+            len(entries),
+        )
+        lines = self.lock.splitlines()
+        for index, line in enumerate(lines[:-1]):
+            if line in entries:
+                self.assertRegex(lines[index + 1], r"^    --hash=sha256:[0-9a-f]{64}")
+        self.assertNotIn("git+", self.lock)
+        self.assertNotIn("--extra-index-url", self.lock)
+
+    def test_workflow_uses_immutable_actions_and_only_tag_release_can_publish(self) -> None:
+        action_refs = re.findall(r"^\s*- uses: ([^\s]+)@([^\s#]+)", self.workflow, re.MULTILINE)
+        self.assertTrue(action_refs)
+        for action, ref in action_refs:
+            self.assertRegex(ref, r"^[0-9a-f]{40}$", f"{action} is not SHA-pinned")
+        self.assertIn("client-release:", self.workflow)
+        self.assertIn("environment: client-release", self.workflow)
+        self.assertIn("github.event_name == 'push' && github.ref_type == 'tag'", self.workflow)
+        self.assertIn("packages: write", self.workflow)
+        self.assertIn("attestations: write", self.workflow)
+        self.assertIn("id-token: write", self.workflow)
+        self.assertIn("linux/amd64,linux/arm64", self.workflow)
+        self.assertIn("--provenance=mode=max", self.workflow)
+        self.assertIn("--sbom=true", self.workflow)
+        self.assertIn("severity-cutoff: high", self.workflow)
+        self.assertIn("fail-build: true", self.workflow)
+        self.assertIn("only-fixed: true", self.workflow)
+        self.assertIn("vex:", self.workflow)
+
+    def test_vex_records_fixed_components(self) -> None:
+        self.assertEqual(self.vex["@context"], "https://openvex.dev/ns/v0.2.0")
+        self.assertEqual(self.vex["version"], 1)
+        self.assertTrue(self.vex["statements"])
+        for statement in self.vex["statements"]:
+            self.assertRegex(statement["vulnerability"]["name"], r"^CVE-\d{4}-\d+$")
+            self.assertEqual(statement["status"], "fixed")
+            product = statement["products"]
+            self.assertEqual(product[0]["@id"], "atellagent-client:scan")
+            self.assertEqual(
+                product[0]["subcomponents"], [{"@id": "pkg:generic/python@3.11.17"}]
+            )
+
+    def test_public_inventory_includes_container_release_files(self) -> None:
+        setup_tree = ast.parse((self.root / "setup.py").read_text(encoding="utf-8"))
+        source_paths = next(
+            ast.literal_eval(node.value)
+            for node in setup_tree.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "PUBLIC_SOURCE_PATHS"
+        )
+        for path in (
+            "docker/Dockerfile",
+            "requirements/container-core-py311.lock",
+            "tests/test_container_release.py",
+        ):
+            self.assertIn(path, source_paths)
+
+    def test_workflow_discovers_the_complete_public_test_suite(self) -> None:
+        workflow = yaml.safe_load(self.workflow)
+        steps = workflow["jobs"]["public-release-boundary"]["steps"]
+        script = next(
+            step["run"] for step in steps
+            if step.get("name") == "Compile and test public Python sources"
+        )
+        self.assertIn(
+            "PYTHONPATH=tests python -m pytest --import-mode=importlib "
+            "--rootdir=tests --confcutdir=tests -c /dev/null tests -q",
+            script,
+        )
+        self.assertNotIn("tests/test_", script)
+
+    def test_release_manifest_platform_check_reads_actual_platform_objects(self) -> None:
+        workflow = yaml.safe_load(self.workflow)
+        steps = workflow["jobs"]["client-release"]["steps"]
+        script = next(
+            step["run"] for step in steps
+            if step.get("name") == "Verify release manifest and record release evidence"
+        )
+        match = re.search(r"python -c '(.*?)' <<<\"\$raw\"", script, re.DOTALL)
+        self.assertIsNotNone(match)
+        platforms = [
+            {"platform": {"os": "linux", "architecture": "amd64"}},
+            {"platform": {"os": "linux", "architecture": "arm64"}},
+            {"platform": {"os": "unknown", "architecture": "unknown"}},
+        ]
+        for entries, expected in ((platforms, 0), (platforms[:1], 1), (platforms[1:], 1), ([], 1)):
+            with self.subTest(platforms=entries):
+                result = subprocess.run(
+                    [sys.executable, "-c", match.group(1)],
+                    input=json.dumps({"manifests": entries, "note": "linux/amd64 linux/arm64"}),
+                    capture_output=True, text=True, timeout=5,
+                )
+                self.assertEqual(result.returncode, expected, result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

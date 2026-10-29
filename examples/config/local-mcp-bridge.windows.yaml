@@ -1,0 +1,3 @@
+# Windows local MCP adapter configuration. The pipe name must match the
+# enrolled hook-control runtime for this Windows user.
+control_socket: '\\.\pipe\atellagent-hook-control'
