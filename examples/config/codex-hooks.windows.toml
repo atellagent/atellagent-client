@@ -1,0 +1,18 @@
+# Windows native-hook template. The named pipe is ACL-protected to the current
+# Windows user by the control runtime; do not replace it with a TCP listener.
+
+# Optional local Atellagent MCP bridge. Do not configure a duplicate public MCP
+# connection for the same local integration.
+[mcp_servers.atellagent]
+command = "atellagent-mcp-bridge.exe"
+args = ["--config", "C:\\ProgramData\\Atellagent\\local-mcp-bridge.windows.yaml"]
+startup_timeout_sec = 30
+
+[[hooks.UserPromptSubmit]]
+hooks = [{ type = "command", command = 'python -m atellagent_client.hook_launcher --host codex --socket \\.\pipe\atellagent-hook-control', timeout = 20, statusMessage = "Atellagent: checking prompt" }]
+
+[[hooks.PreToolUse]]
+hooks = [{ type = "command", command = 'python -m atellagent_client.hook_launcher --host codex --socket \\.\pipe\atellagent-hook-control', timeout = 20, statusMessage = "Atellagent: checking tool action" }]
+
+[[hooks.PostToolUse]]
+hooks = [{ type = "command", command = 'python -m atellagent_client.hook_launcher --host codex --socket \\.\pipe\atellagent-hook-control', timeout = 20, statusMessage = "Atellagent: recording tool result" }]

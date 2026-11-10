@@ -1,0 +1,77 @@
+# Agent integrations
+
+## When to use this package
+
+Use agent contracts for a customer-operated agent boundary, an external-host
+hook control service, or normalized customer tool execution metadata. This is
+not an MCP server merely because it governs tool actions.
+
+## Host hook control
+
+The service bundled with the [Mac and Windows apps](../../docs/DESKTOP_APP.md) runs
+the enrolled `agent.control` boundary on an owner-only Unix socket or a
+current-user ACL-protected Windows named pipe.
+`atellagent-hook-adapter` is credential-free and translates Claude
+Code or Codex command-hook JSON to that socket. Standard host hooks use
+`boundary_identity_only` and provide `turn_entry` model decisions plus tool
+preflight/postflight, not `full_model_request` observation.
+
+For hosts that emit a correlated post-tool event, the runtime durably retains
+only an opaque action correlation plus bounded result size/digest metadata
+until the Gateway acknowledges the outcome. It does not persist tool arguments,
+tool output, or policy directives locally. Hosts without a documented correlated
+post-tool event remain preflight-governed and are recorded by Gateway as an
+unobserved outcome when no callback can arrive.
+
+Follow the [local device service guide](../../docs/LOCAL_SERVICE.md) to enroll and start the controller.
+
+For a local Codex MCP bridge, run
+`atellagent-mcp-bridge --config ./bridge.yaml`. That file contains the same
+absolute local endpoint. The stdio bridge is credential-free; this runtime uses its
+enrolled service-account session to fetch the assigned tool catalog. Start from
+[`examples/config/local-mcp-bridge.yaml`](../../examples/config/local-mcp-bridge.yaml),
+not `tool-proxy.yaml`, which is for a separately enrolled customer-MCP boundary.
+
+See [external host documentation](../../docs/HOST_HOOKS.md) for installation,
+coverage, and host bypass boundaries.
+
+The separate loopback [Anthropic Messages facade](../../docs/hosts/claude-code-route-mode.md)
+is a non-streaming route facade, not a Claude Code deployment: Claude Code
+needs event streaming. It retains the enrolled boundary inside the facade and
+does not replace the host-tool effect boundary.
+
+The [OpenAI Responses facade](../../docs/hosts/codex-route-mode.md) provides
+the same non-streaming route facade. It is not a Codex custom-provider
+deployment.
+
+## Public contracts and failures
+
+Use `BoundaryToolCall`, `BoundaryExecutionMetadata`,
+`HookControlClient`, and `host_hook_capabilities` from this package. The local
+socket rejects malformed authority fields; adapter, socket, directive, and
+control failures deny rather than manufacture a local allow. Customer code
+must not depend on underscored modules or inject an unverified principal ID.
+
+This package does not implement a provider route facade, a workflow engine, or
+the actual MCP tool effect boundary.
+
+
+The packaged command-hook entrypoint uses the stdlib-only
+`atellagent_client.hook_launcher` to relay exact stdin bytes to the ordinary
+adapter in a bounded child process. Startup/import errors and unexpected child
+exit codes become the documented blocking exit 2 instead of a nonblocking
+host error. Healthy adapter output, including JSON policy denials, is preserved;
+ordinary blocking errors retain their sign-in/transport reason.
+Exact Codex `update_goal` blocked/paused/complete calls can recover when the
+child is unavailable, while healthy policy denials still apply. This does not
+make Claude Stop a governed task-completion action.
+
+User hook templates call the guard as a Python module, avoiding a dependency
+on a separately modified adapter console script. Use the Python interpreter
+from the installed Atellagent environment. The managed Codex template retains
+its administrator-owned executable path; that packaged executable resolves to
+the guarded entrypoint after client installation. Installed hook commands are
+not rewritten by a source edit. Missing interpreters, tampered launchers, and
+disabled hooks remain outside the cooperative command boundary; do not claim
+protected execution against those cases. No controller restart is needed for
+a freshly installed command adapter, because hosts launch it per event.

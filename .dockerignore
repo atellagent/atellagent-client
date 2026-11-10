@@ -1,0 +1,17 @@
+# The Dockerfile consumes a release artifact, never this checkout. Docker
+# always receives this ignore file and the selected Dockerfile as build metadata;
+# every other included file below is deliberate runtime input.
+**
+!docker/
+!docker/Dockerfile
+!dist/
+!dist/atellagent_client-*.whl
+!requirements/
+!requirements/container-core-py311.lock
+!security/
+!security/native_components.py
+!security/verify_public_trust.py
+!security/incident-chains/
+!security/incident-chains/*.pem
+!LICENSE.md
+!THIRD_PARTY_NOTICES.md
