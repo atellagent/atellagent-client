@@ -90,13 +90,14 @@ class GatewaySession:
         url: str,
         *,
         headers: Optional[Mapping[str, str]] = None,
+        _reuse_transport: bool = False,
         **kwargs: Any,
     ) -> object:
-        """Use one HTTP/2 connection per request; retry only before connection.
+        """Use request-owned transport unless a short protocol call opts in.
 
         A response/read/write failure does not establish whether a request was
-        accepted. Do not resend it. The bounded server connection lifetime
-        cannot interrupt another request on a reused client connection.
+        accepted. Do not resend it. Optional reuse is exclusive, with a short
+        transport age; long polls and ordinary requests retain fresh ownership.
         """
         extra_headers = dict(headers or {})
         refreshed_token = False
@@ -106,7 +107,9 @@ class GatewaySession:
             device_headers = request_device_headers(self.device_proof_provider,
                 base_url=self.base_url, method=method, url=url, options=kwargs)
             try:
-                async with self.http_client_manager.create_async_client() as client:
+                transport = (self.http_client_manager.borrow_async_client() if _reuse_transport
+                             else self.http_client_manager.create_async_client())
+                async with transport as client:
                     response = await client.request(
                         method,
                         url,
@@ -122,6 +125,15 @@ class GatewaySession:
                 return response
             refreshed_token = True
             self.auth_manager.invalidate_token()
+
+    async def request_protocol_authenticated(self, method: str, url: str, **kwargs: Any) -> object:
+        """Short idempotent ack/result calls may reuse an exclusively owned client.
+
+        Connected receive/registration/control calls retain request-owned
+        connections. Authentication, device proof and TLS pin checks still run
+        on each request; uncertain POSTs are never replayed at this layer.
+        """
+        return await self.request_authenticated(method,url,_reuse_transport=True,**kwargs)
 
     def request_authenticated_sync(
         self,

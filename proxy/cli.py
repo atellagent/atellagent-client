@@ -130,9 +130,9 @@ async def _run_tool_proxy(args: argparse.Namespace) -> int:
         if not separator or not name.strip():
             raise ValueError("--header must use NAME:VALUE")
         headers[name.strip()] = header_value.strip()
-    proxy = MCPToolProxy(target=MCPToolTarget(endpoint_url=args.target, credential_headers=headers or None))
-    result = await proxy.call_tool(tool_name=args.tool, arguments=arguments, action_key=args.action_key)
-    print(json.dumps(result, separators=(",", ":")), flush=True)
+    async with MCPToolProxy(target=MCPToolTarget(endpoint_url=args.target, credential_headers=headers or None)) as proxy:
+        result = await proxy.call_tool(tool_name=args.tool, arguments=arguments, action_key=args.action_key)
+        print(json.dumps(result, separators=(",", ":")), flush=True)
     return 0
 
 

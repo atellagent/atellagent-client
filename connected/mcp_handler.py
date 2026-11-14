@@ -9,6 +9,10 @@ from collections.abc import Mapping
 from atellagent_client.governance.actions import ActionDenied
 
 
+class MCPExecutionUnconfirmed(RuntimeError):
+    """The governed callback was entered but no valid result was retained."""
+
+
 def prepare_mcp_request(participant, request):
     # Snapshot before any await: caller mutation cannot change authorized args.
     if not isinstance(request, Mapping):
@@ -41,12 +45,14 @@ async def execute_mcp_handler(participant, handler, request, idempotency_key, *,
     params = request["params"]
     await participant.enforce_local_action(action=params["name"], correlation_id=correlation_id or idempotency_key,
         facts=_local_mcp_facts(params["name"], params["arguments"]))
-    result = handler(request, idempotency_key)
-    if inspect.isawaitable(result):
-        result = await result
-    if not isinstance(result, Mapping):
-        raise ActionDenied("mcp_response_invalid")
     try:
+        result = handler(request, idempotency_key)
+        if inspect.isawaitable(result):
+            result = await result
+        if not isinstance(result, Mapping):
+            raise ValueError("MCP result is not an object")
         return json.loads(json.dumps(dict(result), allow_nan=False))
-    except (TypeError, ValueError):
-        raise ActionDenied("mcp_response_invalid") from None
+    except Exception as exc:
+        # Callback entry may already have changed the external target. Even
+        # ActionDenied raised inside that callback cannot prove no execution.
+        raise MCPExecutionUnconfirmed("MCP tool result is unconfirmed") from exc

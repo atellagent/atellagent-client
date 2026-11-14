@@ -35,6 +35,13 @@ async def _retry_delivery_network_io(operation):
             # attempt inside the caller's original shared recovery deadline.
             async with asyncio.timeout(_PRE_DISPATCH_ATTEMPT_SECONDS):
                 return await operation()
+        except ConnectedHTTPError as exc:
+            # The exact acknowledgement is idempotent for this original lease.
+            # Retry only temporary service failures, never a denial or a stale
+            # lease. The existing shared deadline and attempt cap still apply.
+            if exc.status_code not in {502,503,504} or attempt+1==_PRE_DISPATCH_MAX_ATTEMPTS:
+                raise
+            await asyncio.sleep(0.1*(2**attempt))
         except (TimeoutError, httpx.NetworkError, httpx.TimeoutException,
                 httpx.RemoteProtocolError):
             if attempt + 1 == _PRE_DISPATCH_MAX_ATTEMPTS:

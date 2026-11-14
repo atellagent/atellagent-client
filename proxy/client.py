@@ -7,18 +7,20 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import os
 from contextlib import AsyncExitStack
 from typing import Any, Dict, Mapping, Optional
 from urllib.parse import urlparse
 
 from atellagent_client.sdk.config import BridgeDeploymentConfig
-from .mcp_errors import MCPTargetError
+from .errors import MCPTargetError
 
 MCP_PROTOCOL_VERSION = "2026-07-28"
+MAX_MCP_DOCUMENT_BYTES = 1024 * 1024
 
 
-def _validate_discovery(result: Mapping[str, Any]) -> None:
+def _validate_discovery(result: Mapping[str, Any]) -> bool:
     """Fail closed unless the local target speaks the pinned modern revision."""
     if result.get("resultType") != "complete":
         raise MCPTargetError("mcp_target_discovery_invalid", "MCP discovery response must be complete")
@@ -37,11 +39,14 @@ def _validate_discovery(result: Mapping[str, Any]) -> None:
         raise MCPTargetError("mcp_target_discovery_invalid", "MCP discovery response must include capabilities")
     experimental = result["capabilities"].get("experimental", {})
     idempotency = experimental.get("atellagent/durableIdempotency") if isinstance(experimental, Mapping) else None
+    if idempotency is None:
+        return False
     if (not isinstance(idempotency, Mapping)
             or idempotency.get("key") != "atellagent/idempotencyKey"
             or idempotency.get("durable") is not True):
-        raise MCPTargetError("mcp_target_idempotency_required",
-            "MCP target must advertise durable delivery idempotency support; a local assertion is insufficient")
+        raise MCPTargetError("mcp_target_idempotency_invalid",
+            "MCP target declared an invalid durable idempotency contract")
+    return True
 
 
 def _require_loopback_url(value: str) -> str:
@@ -67,16 +72,20 @@ def _require_loopback_url(value: str) -> str:
     return parsed.geturl()
 
 
-class LocalMCPClient:
+class MCPClient:
     """Own a reusable local transport; each MCP operation is self-describing."""
 
-    def __init__(self, deployment: BridgeDeploymentConfig) -> None:
+    def __init__(self, deployment: BridgeDeploymentConfig, *, loopback_only: bool = True,
+                 timeout_seconds: float = 300) -> None:
         if deployment.target_transport not in {"stdio", "http"}:
-            raise MCPTargetError("mcp_target_transport_unsupported", "LocalMCPClient requires a stdio or HTTP bridge target")
+            raise MCPTargetError("mcp_target_transport_unsupported", "MCPClient requires a stdio or HTTP bridge target")
         self._deployment = deployment
+        self._loopback_only = loopback_only
+        self._timeout_seconds = min(max(float(timeout_seconds), 1), 300)
         self._owner_task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
         self._client: Any = None
+        self.advertises_durable_idempotency = False
         self._connect_lock = asyncio.Lock()
 
     def _http_headers(self) -> Dict[str, str]:
@@ -96,6 +105,7 @@ class LocalMCPClient:
 
     async def _http_client(self, stack: AsyncExitStack) -> Any:
         import httpx2
+        from .http_transport import BoundedHTTPTransport
 
         certificate = None
         if self._deployment.upstream_cert_path:
@@ -111,9 +121,11 @@ class LocalMCPClient:
         )
         return await stack.enter_async_context(
             httpx2.AsyncClient(
-                transport=transport,
+                transport=BoundedHTTPTransport(transport),
                 headers=self._http_headers(),
                 trust_env=False,
+                follow_redirects=False,
+                timeout=httpx2.Timeout(self._timeout_seconds),
             )
         )
 
@@ -121,7 +133,7 @@ class LocalMCPClient:
         try:
             try:
                 from mcp import Client, StdioServerParameters
-                from mcp.client.stdio import stdio_client
+                from .stdio_transport import bounded_stdio_client
                 from mcp.client.streamable_http import streamable_http_client
             except ImportError as exc:
                 raise MCPTargetError("mcp_target_dependency_missing",
@@ -143,11 +155,12 @@ class LocalMCPClient:
                         args=list(self._deployment.target_args),
                         env=environment or None,
                     )
-                    transport = stdio_client(parameters)
+                    transport = bounded_stdio_client(parameters)
                 else:
-                    target_url = _require_loopback_url(
-                        str(self._deployment.target_url or "")
-                    )
+                    from .targets import MCPToolTarget
+                    configured_url = str(self._deployment.target_url or "")
+                    target_url = (_require_loopback_url(configured_url) if self._loopback_only
+                                  else MCPToolTarget(endpoint_url=configured_url).endpoint_url)
                     http_client = await self._http_client(stack)
                     transport = streamable_http_client(
                         target_url,
@@ -159,7 +172,7 @@ class LocalMCPClient:
                         Client(transport, mode=MCP_PROTOCOL_VERSION, cache=None)
                     )
                     discovery = await client.session.send_discover(MCP_PROTOCOL_VERSION)
-                _validate_discovery(discovery)
+                self.advertises_durable_idempotency = _validate_discovery(discovery)
                 ready.set_result(client)
                 await stop.wait()
         except BaseException as exc:
@@ -175,6 +188,7 @@ class LocalMCPClient:
     async def _stop_connection(self, *, cancel_startup: bool = False) -> None:
         owner = self._owner_task
         self._client = None
+        self.advertises_durable_idempotency = False
         if owner is None:
             return
         self._stop.set()
@@ -227,7 +241,13 @@ class LocalMCPClient:
         idempotency_key: str,
     ) -> Dict[str, Any]:
         """Execute one governed, self-describing modern MCP tools/call."""
-        payload = dict(request)
+        try:
+            encoded = json.dumps(dict(request), allow_nan=False)
+            if len(encoded.encode("utf-8")) > MAX_MCP_DOCUMENT_BYTES:
+                raise ValueError()
+            payload = json.loads(encoded)
+        except (TypeError, ValueError):
+            raise ValueError("MCP request must be a bounded JSON object") from None
         if payload.get("jsonrpc") != "2.0" or payload.get("method") != "tools/call":
             raise ValueError("connected MCP bridge accepts only JSON-RPC tools/call")
         params = payload.get("params")
@@ -241,20 +261,31 @@ class LocalMCPClient:
         if not effect_key:
             raise ValueError("MCP bridge idempotency key is required")
 
+        from .native_credentials import current_native_authorization
+        if self._deployment.target_transport=="stdio" and current_native_authorization() is not None:
+            raise ValueError("Native HTTP credentials require an HTTP target; use the SDK hook for native stdio authority")
         client = await self._connect()
         try:
-            result = await client.call_tool(
-                tool_name,
-                dict(arguments),
-                meta={"atellagent/idempotencyKey": effect_key},
-            )
+            # The high-level SDK call can automatically resolve input requests
+            # and repeat tools/call. One governed dispatch must issue one call;
+            # interactive continuations need a separately authorized action.
+            async with asyncio.timeout(self._timeout_seconds):
+                result = await client.session.call_tool(
+                    tool_name,
+                    dict(arguments),
+                    meta={"atellagent/idempotencyKey": effect_key},
+                    allow_input_required=False,
+                    allow_claimed=False,
+                )
+            result_payload = result.model_dump(mode="json", by_alias=True, exclude_none=True)
+            if len(json.dumps(result_payload, allow_nan=False).encode("utf-8")) > MAX_MCP_DOCUMENT_BYTES:
+                raise ValueError("MCP result exceeded its byte limit")
         except Exception as exc:
             try:
                 await self.close()
             except Exception as cleanup_error:
                 exc.add_note(f"MCP cleanup also failed: {cleanup_error!r}")
             raise
-        result_payload = result.model_dump(mode="json", by_alias=True, exclude_none=True)
         return {
             "jsonrpc": "2.0",
             "id": payload.get("id"),
@@ -264,19 +295,26 @@ class LocalMCPClient:
     async def manifest(self) -> Dict[str, Any]:
         """Read the target's public tool inventory for publication."""
         client = await self._connect()
+        tools, seen, cursor = [], set(), None
         async with asyncio.timeout(20):
-            result = await client.list_tools(cache_mode="bypass")
-        tools = [
-            tool.model_dump(mode="json", by_alias=True, exclude_none=True)
-            for tool in result.tools
-        ]
-        return {"tools": tools}
+            for _page in range(16):
+                result = await client.list_tools(cache_mode="bypass", **({"cursor":cursor} if cursor else {}))
+                tools.extend(tool.model_dump(mode="json", by_alias=True, exclude_none=True) for tool in result.tools)
+                if len(json.dumps({"tools":tools}, allow_nan=False).encode("utf-8")) > MAX_MCP_DOCUMENT_BYTES:
+                    raise ValueError("MCP catalog exceeded its byte limit")
+                cursor = getattr(result, "next_cursor", None)
+                if cursor is None:
+                    return {"tools":tools}
+                if not isinstance(cursor, str) or not cursor or len(cursor)>1024 or cursor in seen:
+                    raise ValueError("MCP catalog cursor is invalid")
+                seen.add(cursor)
+        raise ValueError("MCP catalog exceeded its page limit")
 
     async def close(self) -> None:
         async with self._connect_lock:
             await self._stop_connection()
 
-    async def __aenter__(self) -> "LocalMCPClient":
+    async def __aenter__(self) -> "MCPClient":
         await self._connect()
         return self
 
@@ -284,4 +322,4 @@ class LocalMCPClient:
         await self.close()
 
 
-__all__ = ["LocalMCPClient"]
+__all__ = ["MCPClient"]

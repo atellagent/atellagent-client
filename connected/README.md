@@ -77,25 +77,30 @@ After pickup, use its request ID to `configure` local launch settings, then
 
 Use `ConnectedParticipant`, `ConnectedBridge`, `ConnectedDelivery`, and the
 `mount_*` helpers exported from `atellagent_client.connected`. A handler must
-return a serializable result. Consequential private targets must honor the
-delivery idempotency key; setting `target_idempotent=True` is an explicit
-customer assertion, not local deduplication.
+return a serializable result. Agent, model, filter, channel and workflow
+handlers that have external effects retain their target idempotency contract.
 
-Local MCP bridges additionally validate the target's negotiated protocol and
-advertised delivery contract before registering. Targets must support protocol
-`2026-07-28` and advertise this discovery capability:
+MCP handlers default to `single_dispatch`. The existing central action claim
+and accepted connected delivery permit one execution attempt. A lost result or
+expired accepted lease does not authorize another execution. Retry reporting
+the original result or reconcile an unknown outcome; do not repeat the tool.
+Use a stable logical action key, separate from the wire JSON-RPC request ID.
+Changed arguments under that key conflict; a new logical action is distinct.
 
-```json
-{"experimental": {"atellagent/durableIdempotency": {
-  "key": "atellagent/idempotencyKey", "durable": true
-}}}
-```
+`MCPClient` from `atellagent_client.proxy` is the shared upstream adapter. It
+supports MCP `2026-07-28`, stdio, and loopback Streamable HTTP with JSON or SSE
+responses. Discovery and catalog must validate; an error never causes a
+protocol downgrade. The dedicated old HTTP+SSE transport is removed. Request,
+result and stdio-frame limits are 1 MiB, with a bounded 16-page catalog. Stream
+resumption retrieves a response and never repeats the tool POST.
 
-The target must actually durably deduplicate consequential calls using that
-`_meta` key; declaring the capability is a contract, not an implementation of
-deduplication. An arbitrary MCP server without this support is not a supported
-consequential bridge target. Stdio and loopback streamable HTTP are supported;
-SSE and remote HTTP targets are not.
+Ordinary servers need no proprietary extension. A target that implements
+durable `_meta["atellagent/idempotencyKey"]` handling may declare its native
+contract and be explicitly selected with `target_idempotent=True`. A declaration
+is not an implementation of deduplication. The default single-dispatch handler
+requires central admission and stops on exhausted allowance, including when a
+local passthrough instruction exists. Native-idempotent handlers retain their
+explicit local passthrough contract.
 
 For device-associated MCP setup, use `DeviceMCPContext` from the public SDK.
 For the desktop command line, run `atellagent-cli setup mcp --help` using the

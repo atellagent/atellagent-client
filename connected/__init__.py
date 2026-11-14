@@ -24,8 +24,6 @@ from .participant import (
     ConnectedOperationHandler,
     ConnectedParticipant,
 )
-from .mcp_client import LocalMCPClient
-from .mcp_errors import MCPTargetError
 
 __all__ = [
     "AgentParticipantActions",
@@ -37,8 +35,6 @@ __all__ = [
     "ConnectedOperationHandler",
     "ConnectedParticipant",
     "ConnectedProtocolError",
-    "LocalMCPClient",
-    "MCPTargetError",
     "mount_agent_handler",
     "mount_channel_registry",
     "mount_filter_handler",

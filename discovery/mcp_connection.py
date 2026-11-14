@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 import re
 
-from atellagent_client.connected.mcp_client import _require_loopback_url
+from atellagent_client.proxy.client import _require_loopback_url
 from atellagent_client.onboarding.workload_local_inputs import WorkloadLocalInputs
 
 
@@ -74,4 +74,4 @@ def target_inputs(target, *, credential_environment_names=None,
             raise ValueError("Choose a local HTTP credential environment reference; configuration credential values are not copied")
     else:
         raise ValueError("Connected MCP bridges support stdio or loopback streamable HTTP, not SSE/remote HTTP")
-    return WorkloadLocalInputs(deployment=deployment, target_idempotent=True)
+    return WorkloadLocalInputs(deployment=deployment)

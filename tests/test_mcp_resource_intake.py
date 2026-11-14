@@ -6,6 +6,7 @@ from hashlib import sha256
 import json
 from types import SimpleNamespace
 from uuid import uuid4
+from unittest.mock import AsyncMock
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -17,10 +18,13 @@ from atellagent_client.connected import ConnectedDelivery, ConnectedParticipant,
 from atellagent_client.governance.actions import ActionDenied
 from connected_runtime_support import _config
 from service_account_certificate_support import certificate_case
+from connected_runtime_support import _message
+from atellagent_client.connected.contracts import parse_connected_message
+from atellagent_client.connected.mcp_handler import execute_mcp_handler
 
 
 @pytest.fixture
-def runtime(tmp_path):
+def runtime(tmp_path, request):
     case = certificate_case()
     certificate = tmp_path / "client.crt"
     certificate.write_bytes(case.leaf.public_bytes(serialization.Encoding.PEM))
@@ -104,7 +108,7 @@ def runtime(tmp_path):
     def handler(request, key):
         state.effects.append((request["params"]["arguments"], key))
         return {"jsonrpc": "2.0", "id": request.get("id"), "result": {"content": [{"type": "text", "text": "ok"}]}}
-    mount_mcp_handler(participant, handler, consequential=True, target_idempotent=True)
+    mount_mcp_handler(participant, handler, consequential=True, target_idempotent=getattr(request, "param", True))
     try:
         yield participant, state
     finally:
@@ -113,6 +117,35 @@ def runtime(tmp_path):
 
 def request():
     return {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "echo", "arguments": {"text": "safe"}}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['transport', 'callback-denial', 'invalid-result', 'local-policy'])
+async def test_connected_callback_failure_preserves_execution_uncertainty(runtime, monkeypatch, failure):
+    participant, state = runtime
+    def callback(_request, key):
+        state.effects.append(key)
+        if failure == 'callback-denial':
+            raise ActionDenied('after an external effect')
+        if failure == 'invalid-result':
+            return object()
+        raise ConnectionError('lost original result')
+    if failure == 'local-policy':
+        monkeypatch.setattr(participant, 'enforce_local_action', AsyncMock(side_effect=ActionDenied('before callback')))
+    async def handler(delivery, actions):
+        return await execute_mcp_handler(participant, callback, request(), delivery.idempotency_key)
+    async def renew(*args):
+        await asyncio.Event().wait()
+    commit = AsyncMock()
+    monkeypatch.setattr(participant, '_renew_lease', renew)
+    monkeypatch.setattr(participant, '_commit_result', commit)
+    payload = _message()['message']
+    payload.update(operation='mcp.echo', execution_id=None, execution_attempt_id=None)
+    await participant._process(parse_connected_message(payload), handler)
+    committed = commit.await_args.args[1]
+    assert committed.terminal_status == 'failed'
+    assert committed.result_payload['error_type'] == ('ActionDenied' if failure == 'local-policy' else 'mcp_outcome_unknown')
+    assert len(state.effects) == (0 if failure == 'local-policy' else 1)
 
 
 @pytest.mark.asyncio
@@ -213,3 +246,57 @@ async def test_unexpected_direct_handler_failure_still_logs_and_releases_task(ru
         await participant.handle_mcp_request(request(),idempotency_key='unexpected-handler-failure')
     assert not participant._delivery_tasks
     assert any('connected delivery failed after acknowledgement' in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime", [False], indirect=True)
+async def test_ordinary_target_uses_single_dispatch_with_valid_signed_authority(runtime):
+    participant, state = runtime
+    assert participant._handler_for_operation("mcp.tools_call").idempotency_mode == "single_dispatch"
+    await participant.handle_mcp_request(request(), idempotency_key="ordinary-one")
+    assert len(state.effects) == len(state.receipts) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime", [False], indirect=True)
+async def test_ordinary_target_never_uses_untracked_quota_passthrough(runtime):
+    participant, state = runtime
+    state.mode = "quota_passthrough"
+    for _ in range(3):
+        with pytest.raises(ActionDenied, match="governed_action_decision_quota_exhausted"):
+            await participant.handle_mcp_request(request(), idempotency_key="ordinary-one")
+    assert not state.effects and not state.receipts
+    assert len(state.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime", [False], indirect=True)
+async def test_postflight_network_retry_does_not_repeat_ordinary_tool(runtime, monkeypatch):
+    participant, state = runtime
+    original = participant._request
+    submissions = []
+    async def uncertain(method, path, **kwargs):
+        response = await original(method, path, **kwargs)
+        if path.endswith("/postflight"):
+            submissions.append(kwargs["json"])
+            if len(submissions) == 1:
+                raise httpx.ReadTimeout("lost acknowledgement after commit")
+        return response
+    monkeypatch.setattr(participant, "_request", uncertain)
+    await participant.handle_mcp_request(request(), idempotency_key="ordinary-one")
+    assert len(state.effects) == 1
+    assert len(submissions) == 2 and submissions[0] == submissions[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime", [False], indirect=True)
+async def test_ordinary_handler_exception_reports_unknown_without_automatic_execution_retry(runtime):
+    participant, state = runtime
+    async def uncertain_handler(payload, key):
+        state.effects.append((payload["params"]["arguments"], key))
+        raise OSError("lost upstream result")
+    participant._mcp_handler = uncertain_handler
+    with pytest.raises(ActionDenied, match="mcp_outcome_unknown"):
+        await participant.handle_mcp_request(request(), idempotency_key="ordinary-one")
+    assert len(state.effects) == len(state.receipts) == 1
+    assert state.receipts[0]["error_type"] == "mcp_outcome_unknown"

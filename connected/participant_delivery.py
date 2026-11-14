@@ -18,6 +18,7 @@ from .actions import ConnectedActionClient, _DeliveryActionContext
 from .contracts import ConnectedHandlerResult, ConnectedMessage, ConnectedProtocolError
 from .participant_protocol import ConnectedHTTPError, strict_object
 from .result_budget import build_result_commit_payload
+from .mcp_handler import MCPExecutionUnconfirmed
 
 
 logger = logging.getLogger(__name__)
@@ -182,7 +183,8 @@ class ConnectedDeliveryMixin:
                     result = ConnectedHandlerResult(
                         terminal_status="failed",
                         result_schema="atellagent.connected.error.v1",
-                        result_payload={"error_type": type(exc).__name__},
+                        result_payload={"error_type": "mcp_outcome_unknown"
+                                        if isinstance(exc, MCPExecutionUnconfirmed) else type(exc).__name__},
                     )
                 # The delivery still owns its slot and renewal until the result
                 # is acknowledged. Lease loss cancels the commit, not the effect.

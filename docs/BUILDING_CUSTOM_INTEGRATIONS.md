@@ -106,3 +106,10 @@ boundary. Pass only the documented action facts to `enforce`; `enforce` and
 Use only the imports and contracts named in this guide. Atellagent follows
 semantic versioning for them: minor and patch releases preserve their documented
 contract, while a major release may make a documented breaking change.
+
+
+For ordinary MCP servers, `mount_mcp_handler(runtime, handler, consequential=True)`
+uses the central single-dispatch contract by default. The target need not
+implement a proprietary extension. An accepted call with a lost result cannot
+run again automatically; settlement retries report the same result. See the
+[MCP server guide](ENTERPRISE_MCP.md) for native caller identity and intake.
