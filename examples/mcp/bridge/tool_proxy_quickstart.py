@@ -6,11 +6,11 @@
 from __future__ import annotations
 
 import asyncio
+from atellagent_client.proxy.client import MCPClient
 
 from atellagent_client.examples.workload import load_workload_config, options
 from atellagent_client.connected import (
     ConnectedBridge,
-    LocalMCPClient,
     mount_mcp_handler,
 )
 from atellagent_client.sdk.config import (
@@ -22,11 +22,11 @@ async def run(directory, request_id) -> None:
     config = await load_workload_config(directory, request_id, integration_type="mcp", packaging="bridge")
     if not isinstance(config.deployment, BridgeDeploymentConfig):
         raise ValueError("Tool Proxy example requires bridge packaging")
-    target = LocalMCPClient(config.deployment)
+    target = MCPClient(config.deployment)
     runtime = None
     try:
         runtime = ConnectedBridge(config, mcp_manifest=await target.manifest())
-        mount_mcp_handler(runtime, target.invoke, consequential=True, target_idempotent=True)
+        mount_mcp_handler(runtime, target.invoke, consequential=True)
         await runtime.run_forever()
     finally:
         try:

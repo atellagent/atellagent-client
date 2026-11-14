@@ -1,11 +1,12 @@
-# MCP compatibility proxies
+# MCP adapters
 
 ## Purpose and placement
 
-The MCP compatibility proxies bridge customer-owned MCP peers that need
-supported negotiation compatibility. They are an `mcp_proxy` integration
-surface, not the actual connected MCP tool effect boundary and not the
-external-agent `agent.control` hook proxy.
+The MCP adapters connect customer-owned MCP peers to the existing agent or
+tool invocation surface. `MCPClient` is the sole upstream wire adapter used by
+both connected bridges and `MCPToolProxy`. The native-agent facade continues
+to use its configured invocation port; tool governance belongs to the enrolled
+runtime and its mounted handler.
 
 ## Public entry points and packaging
 
@@ -13,7 +14,26 @@ Install `atellagent-client[mcp]` plus the matching proxy extra. Use
 `atellagent-mcp-bridge` for a local agent-proxy stdio facade and
 `atellagent-agent-proxy` for a direct-SDK stdio facade. `atellagent-tool-proxy`
 is a tool-facing target facade. Programmatic entry points are `MCPAgentProxy`,
-`MCPToolProxy`, `MCPToolTarget`, and `MCPProxyTool`.
+`MCPClient`, `MCPToolProxy`, `MCPToolTarget`, `MCPProxyTool`, and `MCPResourceProxy`.
+The original-tool resource facade and verified native context are documented
+in the [MCP server guide](../docs/ENTERPRISE_MCP.md).
+The tool-proxy extra includes the pinned MCP SDK; ordinary SDK imports remain
+independent of optional wire dependencies.
+
+Upstream stdio and Streamable HTTP targets must support `2026-07-28`.
+HTTP responses may be JSON or SSE. Resumption uses a bounded response GET;
+it never resubmits an uncertain tool POST. Authentication errors and malformed
+discovery refuse without a downgrade. The old HTTP+SSE endpoint transport and
+alternate upstream negotiation paths have been removed.
+
+The native-agent stdio facade accepts its explicitly supported initialize
+revisions (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`) or modern
+discovery. An unknown revision is refused. This does not expand the upstream
+target revision set.
+
+The connected bridge retains loopback-only HTTP targets. The standalone tool
+facade retains explicit HTTPS target configuration. Credentials stay local.
+Use `async with MCPToolProxy(...)` or call `close()` to release its connection.
 
 ```bash
 atellagent-mcp-bridge --config bridge.yaml

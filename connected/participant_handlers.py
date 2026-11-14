@@ -30,9 +30,9 @@ class ConnectedOperationHandler:
     idempotency_mode: str
 
     def __post_init__(self) -> None:
-        if self.idempotency_mode not in {"none", "target"}:
-            raise ValueError("idempotency_mode must be 'none' or 'target'")
-        if self.consequential and self.idempotency_mode != "target":
+        if self.idempotency_mode not in {"none", "target", "single_dispatch"}:
+            raise ValueError("idempotency_mode must be 'none', 'target', or 'single_dispatch'")
+        if self.consequential and self.idempotency_mode not in {"target", "single_dispatch"}:
             raise ValueError(
                 "consequential handlers must propagate delivery.idempotency_key "
                 "to an idempotent target"
@@ -50,6 +50,10 @@ class ConnectedHandlerRegistryMixin:
             raise ValueError(
                 "operation wildcard is supported only as a trailing .* suffix"
             )
+        if registration.idempotency_mode == "single_dispatch" and not (
+            normalized == "mcp.*" or normalized.startswith("mcp.")
+        ):
+            raise ValueError("single_dispatch requires the governed MCP delivery lifecycle")
         if normalized in self._handlers:
             raise ValueError(f"handler already registered for {normalized}")
         self._handlers[normalized] = registration

@@ -80,6 +80,8 @@ class HTTPClientManager:
 
         self._sync_client: Optional[httpx.Client] = None
         self._async_client: Optional[httpx.AsyncClient] = None
+        self._request_pool = None
+        self._request_pool_material = None
         self._pending_async_close_tasks: Set[asyncio.Task] = set()
         self._server_identity_validator = server_identity_validator
         self._ssl_context: Optional[ssl.SSLContext] = None
@@ -173,6 +175,47 @@ class HTTPClientManager:
             event_hooks={"response": [self._validate_httpx_response_async]},
         )
 
+    def borrow_async_client(self):
+        """Borrow an exclusive connection; failures never reset a neighbor."""
+        from .gateway.request_pool import RequestClientPool
+        if self._request_pool is None or self._request_pool.closed:
+            self._request_pool = RequestClientPool(self.create_async_client, self._request_generation)
+        return self._request_pool.borrow()
+
+    def _request_generation(self):
+        # Session replacement owns certificate rotation. Also invalidate idle
+        # sockets if configured material is replaced while this manager lives.
+        paths = [p for p in (self._cert_tuple or ())]
+        if isinstance(self._verify_target, str):
+            paths.append(self._verify_target)
+        material = []
+        for path in paths:
+            item = os.stat(path)
+            material.append((path,item.st_dev,item.st_ino,item.st_size,item.st_mtime_ns,item.st_ctime_ns))
+        material = tuple(material)
+        if material != self._request_pool_material:
+            # Existing active clients keep their immutable TLS context. New
+            # loans use newly loaded cert/key/CA files after rotation.
+            context = None
+            if self._cert_tuple and all(self._cert_tuple):
+                if self._verify_target is False:
+                    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+                else:
+                    context = ssl.create_default_context(cafile=(self._verify_target
+                        if isinstance(self._verify_target, str) else None))
+                context.load_cert_chain(*self._cert_tuple)
+            after = []
+            for path in paths:
+                item = os.stat(path)
+                after.append((path,item.st_dev,item.st_ino,item.st_size,item.st_mtime_ns,item.st_ctime_ns))
+            if tuple(after) != material:
+                raise RuntimeError("Gateway TLS material changed during reload")
+            self._ssl_context = context
+            self._request_pool_material = material
+        return id(self._ssl_context),material
+
     async def get_async_client(self) -> httpx.AsyncClient:
         """Get or create a pooled asynchronous HTTP client."""
         if self._async_client is None:
@@ -193,20 +236,32 @@ class HTTPClientManager:
             self._sync_client is None
             and self._async_client is None
             and not self._pending_async_close_tasks
+            and (self._request_pool is None or self._request_pool.closed)
         ):
             self._cleanup_temp()
 
     def _close_async_client_from_sync(self) -> None:
         async_client = self._async_client
-        if async_client is None:
+        request_pool = self._request_pool
+        if async_client is None and (request_pool is None or request_pool.closed):
             return
         self._async_client = None
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            asyncio.run(async_client.aclose())
+            async def close_owned():
+                if async_client is not None:
+                    await async_client.aclose()
+                if request_pool is not None:
+                    await request_pool.aclose()
+            asyncio.run(close_owned())
             return
-        task = loop.create_task(async_client.aclose())
+        async def close_owned():
+            if async_client is not None:
+                await async_client.aclose()
+            if request_pool is not None:
+                await request_pool.aclose()
+        task = loop.create_task(close_owned())
         self._track_async_close_task(task)
 
     def close_sync(self):
@@ -222,6 +277,8 @@ class HTTPClientManager:
         if self._sync_client:
             self._sync_client.close()
             self._sync_client = None
+        if self._request_pool is not None:
+            await self._request_pool.aclose()
         if self._async_client:
             await self._async_client.aclose()
             self._async_client = None

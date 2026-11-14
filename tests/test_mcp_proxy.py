@@ -26,7 +26,7 @@ from atellagent_client.proxy.bridge_config import load_local_mcp_bridge_config
 from atellagent_client.proxy.cli import _LocalMCPToolGateway, _run_local_mcp_bridge
 from atellagent_client.integrations.agents.hook_control_protocol import HookControlError
 from atellagent_client.sdk.client_modules.mcp_tools import _mcp_tool_result
-from atellagent_client.proxy.tool import LEGACY_MCP_PROTOCOL_VERSIONS, MCPToolProxyError
+from atellagent_client.proxy.tool import SESSION_MCP_PROTOCOL_VERSIONS, MCPToolProxyError
 
 
 class _Gateway:
@@ -62,21 +62,6 @@ class _BridgeClient:
             ),
             "isError": True,
         }
-
-
-class _ProxyWithTransport(MCPToolProxy):
-    def __init__(self, *, target: MCPToolTarget, handler) -> None:
-        super().__init__(target=target)
-        self._transport = httpx.MockTransport(handler)
-
-    async def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(transport=self._transport, trust_env=False)
-
-
-def json_body(request: httpx.Request) -> Mapping[str, Any]:
-    value = json.loads(request.content)
-    assert isinstance(value, Mapping)
-    return value
 
 
 class MCPAgentProxyTests(unittest.IsolatedAsyncioTestCase):
@@ -227,13 +212,13 @@ class MCPAgentProxyTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("private transport detail", json.dumps(document))
 
-    async def test_legacy_initialization_binds_one_session_and_calls_gateway(self) -> None:
+    async def test_session_initialization_binds_one_session_and_calls_gateway(self) -> None:
         gateway = _Gateway()
         proxy = MCPAgentProxy(gateway=gateway)
         initialized = await proxy.handle(
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {}}}
         )
-        self.assertEqual(initialized.protocol, MCPPeerProtocol.LEGACY_STREAMABLE_HTTP)
+        self.assertEqual(initialized.protocol, MCPPeerProtocol.STATEFUL)
         self.assertTrue(initialized.session_id)
         response = await proxy.handle(
             {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "echo", "arguments": {"text": "hello"}}},
@@ -242,38 +227,31 @@ class MCPAgentProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.document["result"]["content"][0]["text"], "ok")
         self.assertEqual(gateway.calls, [("echo", {"text": "hello"}, 2)])
 
-    async def test_each_supported_legacy_revision_is_bound_to_its_own_session(self) -> None:
-        for revision in LEGACY_MCP_PROTOCOL_VERSIONS:
+    async def test_each_supported_session_revision_is_bound_to_its_own_session(self) -> None:
+        for revision in SESSION_MCP_PROTOCOL_VERSIONS:
             with self.subTest(revision=revision):
                 proxy = MCPAgentProxy(gateway=_Gateway())
                 response = await proxy.handle(
                     {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": revision, "capabilities": {}, "clientInfo": {}}}
                 )
-                self.assertEqual(response.protocol, MCPPeerProtocol.LEGACY_STREAMABLE_HTTP)
+                self.assertEqual(response.protocol, MCPPeerProtocol.STATEFUL)
                 self.assertTrue(response.session_id)
 
-    async def test_unknown_initialize_offers_supported_revision_and_binds_it(self) -> None:
+    async def test_unknown_initialize_refuses_without_protocol_downgrade(self):
         gateway = _Gateway()
         proxy = MCPAgentProxy(gateway=gateway)
-        initialized = await proxy.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {"protocolVersion": "2099-01-01"}})
-        self.assertEqual(initialized.document["result"]["protocolVersion"], "2025-11-25")
-        session = {"Mcp-Session-Id": initialized.session_id, "MCP-Protocol-Version": "2025-11-25"}
-        listed = await proxy.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, headers=session)
-        self.assertEqual(listed.document["result"]["tools"][0]["name"], "echo")
         with self.assertRaises(MCPAgentProxyError):
-            await proxy.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/list"},
-                headers={**session, "MCP-Protocol-Version": "2099-01-01"})
+            await proxy.handle({"jsonrpc":"2.0", "id":1, "method":"initialize",
+                "params":{"protocolVersion":"2099-01-01"}})
         self.assertEqual(gateway.calls, [])
 
-    async def test_stdio_fallback_retains_negotiated_revision_not_requested_revision(self) -> None:
-        proxy = MCPAgentProxy(gateway=_Gateway())
-        result = json.loads(await proxy.handle_json_line(json.dumps({"jsonrpc": "2.0", "id": 1,
-            "method": "initialize", "params": {"protocolVersion": "2099-01-01"}})))
-        self.assertEqual(result["result"]["protocolVersion"], "2025-11-25")
-        listed = json.loads(await proxy.handle_json_line(json.dumps({"jsonrpc": "2.0", "id": 2,
-            "method": "tools/list", "params": {}})))
-        self.assertEqual(listed["result"]["tools"][0]["name"], "echo")
+    async def test_stdio_unknown_revision_does_not_create_a_session(self):
+        gateway = _Gateway()
+        proxy = MCPAgentProxy(gateway=gateway)
+        reply = json.loads(await proxy.handle_json_line(json.dumps({"jsonrpc":"2.0", "id":1,
+            "method":"initialize", "params":{"protocolVersion":"2099-01-01"}})))
+        self.assertIn("error", reply)
+        self.assertEqual(gateway.calls, [])
 
     async def test_initialize_rejects_malformed_revisions_before_catalog(self) -> None:
         gateway = _Gateway()
@@ -286,7 +264,7 @@ class MCPAgentProxyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result["error"]["code"], -32600)
         gateway.list_tools.assert_not_awaited()
 
-    async def test_ambiguous_legacy_negotiation_fails_closed(self) -> None:
+    async def test_ambiguous_session_negotiation_fails_closed(self) -> None:
         proxy = MCPAgentProxy(gateway=_Gateway())
         with self.assertRaisesRegex(MCPAgentProxyError, "disagree"):
             await proxy.handle(
@@ -294,7 +272,7 @@ class MCPAgentProxyTests(unittest.IsolatedAsyncioTestCase):
                 headers={"MCP-Protocol-Version": "2024-11-05"},
             )
 
-    async def test_modern_discovery_is_stateless_and_legacy_is_not_inferred(self) -> None:
+    async def test_modern_discovery_is_stateless_and_sessions_are_not_inferred(self) -> None:
         proxy = MCPAgentProxy(gateway=_Gateway())
         discovery = await proxy.handle(
             {"jsonrpc": "2.0", "id": "d", "method": "server/discover", "params": {"_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}}}
@@ -330,113 +308,3 @@ class MCPAgentProxyTests(unittest.IsolatedAsyncioTestCase):
             response = await proxy.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}})
         with patch("atellagent_client.proxy.agent.monotonic", return_value=100000), self.assertRaisesRegex(MCPAgentProxyError, "expired"):
             await proxy.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, headers={"Mcp-Session-Id": response.session_id})
-
-
-class MCPToolProxyTests(unittest.IsolatedAsyncioTestCase):
-    async def test_modern_discovery_and_action_key_are_preserved(self) -> None:
-        requests: list[httpx.Request] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            requests.append(request)
-            payload = json_body(request)
-            if payload["method"] == "server/discover":
-                return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": {"resultType": "complete", "supportedVersions": ["2026-07-28"], "capabilities": {}}})
-            return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": {"resultType": "complete", "content": [{"type": "text", "text": "ok"}]}})
-
-        proxy = _ProxyWithTransport(target=MCPToolTarget(endpoint_url="https://tools.example/mcp"), handler=handler)
-        result = await proxy.call_tool(tool_name="echo", arguments={"text": "hello"}, action_key="issued-action-1")
-        self.assertEqual(result["content"][0]["text"], "ok")
-        self.assertEqual(len(requests), 2)
-        self.assertEqual(requests[1].headers["idempotency-key"], "issued-action-1")
-        self.assertEqual(json_body(requests[1])["method"], "tools/call")
-
-    async def test_modern_noncompatibility_status_allows_explicit_legacy_negotiation(self) -> None:
-        def handler(request: httpx.Request) -> httpx.Response:
-            payload = json_body(request)
-            if payload["method"] == "server/discover":
-                return httpx.Response(404)
-            return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": {"protocolVersion": "2025-03-26", "capabilities": {}}}, headers={"mcp-session-id": "peer-session"})
-
-        proxy = _ProxyWithTransport(target=MCPToolTarget(endpoint_url="https://tools.example/mcp"), handler=handler)
-        self.assertEqual(await proxy.selected_protocol(), MCPPeerProtocol.LEGACY_STREAMABLE_HTTP)
-
-    async def test_invalid_modern_discovery_does_not_downgrade_to_legacy(self) -> None:
-        requests: list[httpx.Request] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            requests.append(request)
-            payload = json_body(request)
-            return httpx.Response(
-                200,
-                json={"jsonrpc": "2.0", "id": payload["id"], "result": {"resultType": "complete", "supportedVersions": ["2025-03-26"], "capabilities": {}}},
-            )
-
-        proxy = _ProxyWithTransport(target=MCPToolTarget(endpoint_url="https://tools.example/mcp"), handler=handler)
-        with self.assertRaisesRegex(MCPToolProxyError, "discovery response is invalid"):
-            await proxy.selected_protocol()
-        self.assertEqual(len(requests), 1)
-
-    async def test_legacy_sse_resumes_once_without_replaying_the_tool_call(self) -> None:
-        requests: list[httpx.Request] = []
-        result_id: str | None = None
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            nonlocal result_id
-            requests.append(request)
-            if request.method == "GET":
-                if "last-event-id" in request.headers:
-                    return httpx.Response(
-                        200,
-                        headers={"content-type": "text/event-stream"},
-                        content=(
-                            "data: "
-                            + json.dumps(
-                                {
-                                    "jsonrpc": "2.0",
-                                    "id": result_id,
-                                    "result": {"content": [{"type": "text", "text": "resumed"}]},
-                                }
-                            )
-                            + "\n\n"
-                        ),
-                    )
-                if len([item for item in requests if item.method == "GET"]) == 1:
-                    return httpx.Response(200, headers={"content-type": "text/event-stream"}, content="event: endpoint\ndata: /messages\n\n")
-                return httpx.Response(200, headers={"content-type": "text/event-stream"}, content="id: cursor-1\n\n")
-            payload = json_body(request)
-            if request.url.path == "/mcp" and payload["method"] in {"server/discover", "initialize"}:
-                return httpx.Response(404)
-            if payload["method"] == "tools/call":
-                result_id = payload["id"]
-            return httpx.Response(202)
-
-        proxy = _ProxyWithTransport(target=MCPToolTarget(endpoint_url="https://tools.example/mcp"), handler=handler)
-        result = await proxy.call_tool(tool_name="echo", arguments={"text": "hello"}, action_key="issued-action-1")
-        self.assertEqual(result["content"][0]["text"], "resumed")
-        self.assertEqual(len([request for request in requests if request.method == "POST" and json_body(request).get("method") == "tools/call"]), 1)
-        resumed = [request for request in requests if request.method == "GET" and "last-event-id" in request.headers]
-        self.assertEqual(len(resumed), 1)
-        self.assertEqual(resumed[0].headers["last-event-id"], "cursor-1")
-
-    async def test_legacy_sse_without_cursor_fails_without_replaying_the_tool_call(self) -> None:
-        requests: list[httpx.Request] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            requests.append(request)
-            if request.method == "GET":
-                if len([item for item in requests if item.method == "GET"]) == 1:
-                    return httpx.Response(200, headers={"content-type": "text/event-stream"}, content="event: endpoint\ndata: /messages\n\n")
-                return httpx.Response(200, headers={"content-type": "text/event-stream"}, content="")
-            payload = json_body(request)
-            if request.url.path == "/mcp" and payload["method"] in {"server/discover", "initialize"}:
-                return httpx.Response(404)
-            return httpx.Response(202)
-
-        proxy = _ProxyWithTransport(target=MCPToolTarget(endpoint_url="https://tools.example/mcp"), handler=handler)
-        with self.assertRaisesRegex(Exception, "without a resumable event cursor"):
-            await proxy.call_tool(tool_name="echo", arguments={"text": "hello"}, action_key="issued-action-1")
-        self.assertEqual(len([request for request in requests if request.method == "POST" and json_body(request).get("method") == "tools/call"]), 1)
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -39,11 +39,11 @@ class ConnectedTransportMixin:
             await self._device_registration_refresher()
         url = self._url(path, message=message)
         payload = dict(json) if json is not None else None
-        response = await self.session.request_authenticated(
-            method,
-            url,
-            json=payload,
-        )
+        send = self.session.request_authenticated
+        if (path in {self.config.acknowledgement_path_template,self.config.result_path_template}
+                and callable(getattr(type(self.session),"request_protocol_authenticated",None))):
+            send = self.session.request_protocol_authenticated
+        response = await send(method,url,json=payload)
         if response.http_version != "HTTP/2":
             raise ConnectedProtocolError("connected runtime request did not use HTTP/2")
         if response.status_code >= 400:
