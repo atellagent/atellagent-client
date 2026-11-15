@@ -264,7 +264,7 @@ receives an event. Open a chat in a valid Windows directory.
 
 ### WSL2
 
-The 0.9.4 native endpoint installers target macOS and Windows. Use
+The native endpoint installers target macOS and Windows. Use
 [standalone workload setup](../connected/README.md) for Linux and WSL integrations.
 A native Windows host agent uses the bundled service and its Windows pipe.
 

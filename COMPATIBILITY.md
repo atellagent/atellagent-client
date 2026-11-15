@@ -19,6 +19,26 @@ patch releases; a major version may make a documented breaking change.
 
 Provider-native tool adapters are available for OpenAI, Google, and Anthropic.
 
+## 0.9.5 MCP adapter cutover
+
+This release consolidates MCP adapters into `atellagent_client.proxy`. Import
+`MCPClient` and `MCPTargetError` from that package. The old connected MCP modules
+and exports have been removed; update imports when installing 0.9.5. There are
+no aliases for the removed paths.
+
+Upstream servers must support revision `2026-07-28` over stdio or Streamable
+HTTP with JSON or SSE responses. The old HTTP+SSE endpoint transport is removed.
+The native agent-facing facade has its separately declared supported revisions;
+see the [adapter guide](proxy/README.md). No error-triggered protocol downgrade
+or alternate execution path is used.
+
+Ordinary MCP targets do not need Atellagent's durable-idempotency extension.
+Accepted consequential calls use single dispatch. A lost result after invocation
+can mean an unknown outcome: reconcile the original action rather than submit
+the operation again. Verified target-native idempotency remains optional.
+
+## Python support
+
 The current release supports CPython 3.11 only. A Python version is added to
 the supported range only after its dependency lock, package build, complete
 test suite, Docker smoke test, and documented examples pass in CI.

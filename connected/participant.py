@@ -75,6 +75,7 @@ class ConnectedParticipant(
             else None
         )
         self._mcp_handler = None
+        self._mcp_idempotency_mode = None
         self._mcp_publication = None
         self._mcp_direct_gate = None
         self._handlers: Dict[str, ConnectedOperationHandler] = {}
@@ -141,7 +142,8 @@ class ConnectedParticipant(
         from tool arguments or unverified headers. None records boundary-only
         attribution. The current server-owned caller-access setting is checked
         centrally on every admission; no restart or cached client toggle grants
-        access. Consequential handlers must honor the supplied target key.
+        access. Ordinary targets execute once under durable central authority;
+        uncertain operations must be reconciled without another execution.
         """
         from .mcp_boundary import handle_direct_mcp_request
         from atellagent_client.governance.actions import ActionDenied
@@ -279,7 +281,10 @@ class ConnectedParticipant(
             raise outcome
 
     async def _finish_stop(self, *, grace_seconds: float) -> None:
-        if self._instance_id:
+        # A denied in-flight receive can clear the shared presence identity
+        # while drain is awaiting its response. Retain the exact cleanup owner.
+        stopping_instance_id = self._instance_id
+        if stopping_instance_id:
             try:
                 # Remote presence is advisory to cleanup; an unreachable server
                 # must not consume the full HTTP timeout before local tasks stop.
@@ -293,7 +298,7 @@ class ConnectedParticipant(
                     "drain response",
                 )
                 if (
-                    str(payload.get("instance_id")) != self._instance_id
+                    str(payload.get("instance_id")) != stopping_instance_id
                     or payload.get("presence_status") != "draining"
                 ):
                     raise ConnectedProtocolError("drain response binding mismatch")
@@ -304,6 +309,10 @@ class ConnectedParticipant(
                 task.cancel()
         await asyncio.gather(*self._loop_tasks, return_exceptions=True)
         self._loop_tasks.clear()
+        # Liveness loops are joined, so this identity cannot be cleared again.
+        # Keep it for accepted-result settlement and ordinary deregistration;
+        # the stop event remains set and no receive/admission is restarted.
+        self._instance_id = stopping_instance_id or self._instance_id
         if self._delivery_tasks:
             _done, pending = await asyncio.wait(
                 set(self._delivery_tasks), timeout=max(0.0, float(grace_seconds))

@@ -253,10 +253,15 @@ def mount_mcp_handler(
     handler: Callable[[Dict[str, Any], str], Any],
     *,
     consequential: bool,
-    target_idempotent: bool,
+    target_idempotent: bool = False,
 ) -> None:
     from .mcp_handler import execute_mcp_handler, prepare_mcp_request
-    mode = _target_mode(consequential=consequential, target_idempotent=target_idempotent)
+    if type(target_idempotent) is not bool:
+        raise ValueError("target_idempotent must be a boolean")
+    # Every ordinary target uses central single-dispatch authority, regardless
+    # of untrusted read-only hints. Native idempotency is an optional stronger
+    # operator contract, never an excuse to redispatch an accepted delivery.
+    mode = "target" if target_idempotent else "single_dispatch"
     if participant._mcp_handler is not None:
         raise ValueError("an MCP handler is already mounted")
 
@@ -268,6 +273,7 @@ def mount_mcp_handler(
 
     participant.register_handler("mcp.*", invoke, consequential=consequential, idempotency_mode=mode)
     participant._mcp_handler = handler
+    participant._mcp_idempotency_mode = mode
 
 
 def _workflow_request(delivery: ConnectedDelivery) -> Dict[str, Any]:

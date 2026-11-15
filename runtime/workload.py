@@ -6,10 +6,11 @@ import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 import yaml
-from atellagent_client.connected import (ConnectedBridge, LocalMCPClient, mount_agent_handler,
+from atellagent_client.connected import (ConnectedBridge, mount_agent_handler,
     mount_channel_registry, mount_filter_handler, mount_mcp_handler, mount_model_handler, mount_workflow_handler)
 from atellagent_client.integrations.channels.registry import ChannelAdapterRegistry
 from atellagent_client.sdk import ConnectedSDKRuntime
+from atellagent_client.proxy.client import MCPClient
 
 
 def load_handler(reference):
@@ -48,7 +49,7 @@ def mount_handler(participant, config, handler, *, target_idempotent):
 @asynccontextmanager
 async def open_participant(config, inputs, *, handler=None, mcp_manifest=None,
                            device_proof_provider=None, device_id=None):
-    if not inputs.target_idempotent:
+    if config.integration_type != "mcp" and not inputs.target_idempotent:
         raise ValueError("The customer target must durably honor delivery idempotency keys; configure --target-idempotent")
     participant, local_mcp = None, None
     try:
@@ -58,8 +59,11 @@ async def open_participant(config, inputs, *, handler=None, mcp_manifest=None,
         if config.packaging == "bridge" and config.integration_type == "mcp" and config.deployment.target_transport in {"stdio", "http"}:
             if handler is not None:
                 raise ValueError("A bridge target cannot also use a caller-supplied handler")
-            local_mcp = LocalMCPClient(config.deployment)
-            if manifest is None: manifest = await local_mcp.manifest()
+            local_mcp = MCPClient(config.deployment)
+            discovered = await local_mcp.manifest()
+            if manifest is None: manifest = discovered
+            if inputs.target_idempotent and not local_mcp.advertises_durable_idempotency:
+                raise ValueError("The MCP target does not advertise the selected durable idempotency contract")
             handler = local_mcp.invoke
         else:
             if handler is None:

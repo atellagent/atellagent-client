@@ -10,22 +10,22 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from atellagent_client.connected.mcp_client import (
-    LocalMCPClient,
+from atellagent_client.proxy.client import (
+    MCPClient,
     _require_loopback_url,
     _validate_discovery,
 )
 from atellagent_client.sdk.config_models import BridgeDeploymentConfig
 
 
-class LocalMCPClientTests(unittest.IsolatedAsyncioTestCase):
+class MCPClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_uses_the_pinned_reference_server_contract(self) -> None:
         reference_server = (
             Path(__file__).resolve().parent
             / "fixtures"
             / "modern_mcp_reference_server.py"
         )
-        client = LocalMCPClient(
+        client = MCPClient(
             BridgeDeploymentConfig(
                 target_transport="stdio",
                 target_command=sys.executable,
@@ -50,13 +50,13 @@ class LocalMCPClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["result"]["content"][0]["text"], "ok")
 
     async def test_binds_effect_key_to_tools_call(self) -> None:
-        target = LocalMCPClient(
+        target = MCPClient(
             BridgeDeploymentConfig(target_transport="stdio", target_command="example-mcp")
         )
         result_value = SimpleNamespace(
             model_dump=Mock(return_value={"content": [{"type": "text", "text": "ok"}]})
         )
-        target._client = SimpleNamespace(call_tool=AsyncMock(return_value=result_value))
+        target._client = SimpleNamespace(session=SimpleNamespace(call_tool=AsyncMock(return_value=result_value)))
         response = await target.invoke(
             {
                 "jsonrpc": "2.0",
@@ -66,17 +66,18 @@ class LocalMCPClientTests(unittest.IsolatedAsyncioTestCase):
             },
             "effect-1",
         )
-        target._client.call_tool.assert_awaited_once_with(
-            "lookup", {"id": 7}, meta={"atellagent/idempotencyKey": "effect-1"}
+        target._client.session.call_tool.assert_awaited_once_with(
+            "lookup", {"id": 7}, meta={"atellagent/idempotencyKey": "effect-1"},
+            allow_input_required=False, allow_claimed=False
         )
         self.assertEqual(response["id"], "request-1")
         self.assertEqual(response["result"]["content"][0]["text"], "ok")
 
     async def test_transport_failure_is_not_retried(self) -> None:
-        target = LocalMCPClient(
+        target = MCPClient(
             BridgeDeploymentConfig(target_transport="stdio", target_command="example-mcp")
         )
-        client = SimpleNamespace(call_tool=AsyncMock(side_effect=ConnectionError("lost")))
+        client = SimpleNamespace(session=SimpleNamespace(call_tool=AsyncMock(side_effect=ConnectionError("lost"))))
         target._client = client
         target.close = AsyncMock()
         with self.assertRaises(ConnectionError):
@@ -89,11 +90,11 @@ class LocalMCPClientTests(unittest.IsolatedAsyncioTestCase):
                 },
                 "effect-1",
             )
-        client.call_tool.assert_awaited_once()
+        client.session.call_tool.assert_awaited_once()
         target.close.assert_awaited_once()
 
     async def test_manifest_bypasses_discovery_cache(self) -> None:
-        target = LocalMCPClient(
+        target = MCPClient(
             BridgeDeploymentConfig(target_transport="stdio", target_command="example-mcp")
         )
         listed_tool = SimpleNamespace(
@@ -137,14 +138,17 @@ class LocalMCPClientTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "loopback"):
             _require_loopback_url("https://mcp.example.com/mcp")
 
-    def test_target_must_advertise_durable_idempotency_not_just_local_checkbox(self) -> None:
+    def test_ordinary_target_does_not_need_a_proprietary_extension(self) -> None:
         discovery = {"resultType": "complete", "supportedVersions": ["2026-07-28"],
                      "cacheScope": "private", "ttlMs": 0, "capabilities": {"tools": {}}}
-        with self.assertRaisesRegex(ValueError, "durable delivery idempotency"):
+        self.assertFalse(_validate_discovery(discovery))
+        discovery["capabilities"]["experimental"] = {"atellagent/durableIdempotency": {
+            "key": "wrong", "durable": True}}
+        with self.assertRaisesRegex(ValueError, "invalid durable idempotency"):
             _validate_discovery(discovery)
 
     def test_http_auth_is_loaded_only_from_environment(self) -> None:
-        target = LocalMCPClient(
+        target = MCPClient(
             BridgeDeploymentConfig(
                 target_transport="http",
                 target_url="http://127.0.0.1:9000/mcp",

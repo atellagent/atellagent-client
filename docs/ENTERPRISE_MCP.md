@@ -23,7 +23,7 @@ Both execute the handler registered with `mount_mcp_handler`.
    **Runtimes & Integrations** edits the same setting. Its default is off.
 
 ```python
-mount_mcp_handler(runtime, execute_tool, consequential=True, target_idempotent=True)
+mount_mcp_handler(runtime, execute_tool, consequential=True)
 
 # Inside your existing, authenticated tools/call dispatcher:
 caller = caller_from_auth_context(request.auth_context)
@@ -35,6 +35,11 @@ response = await runtime.handle_mcp_request(
 ```
 
 `execute_tool(request, idempotency_key)` is the same handler for both intakes.
+Ordinary servers need no custom idempotency extension. The mounted handler uses
+durable central single-dispatch authority: an uncertain call is not executed
+again automatically. Keep the logical action key stable for retries and separate
+from wire request IDs. The same key with different arguments is a conflict.
+An unknown outcome requires reconciliation, not a new automatic tool call.
 Every protected tool dispatch must pass through it. A sidecar pointing at a
 server does not protect another listener that bypasses this dispatch boundary.
 Keep your normal target permissions and native authentication in place.
@@ -126,3 +131,53 @@ The organization quota control also applies to the direct resource intake.
 See [governed-action allowance](QUOTA_EXHAUSTION.md) for stop/passthrough, the
 loss of central checks and audit, and bounded recovery. The same mounted handler
 and local restrictions are used. Your server continues to authenticate callers.
+
+
+## Original-tool proxy facade
+
+For an unchanged upstream, the existing bridge can mount `MCPClient.invoke` as
+its handler and publish the upstream catalog. Mount `MCPResourceProxy` in the
+customer's existing authenticated HTTP listener to expose those original names,
+schemas and structured results. It uses the same participant and mounted handler;
+it does not create another runtime or login.
+
+```python
+from atellagent_client.proxy import MCPResourceProxy, NativeMCPContext
+
+proxy = MCPResourceProxy(
+    participant=runtime,
+    authorization_boundary="native_upstream",
+)
+
+# After the listener verifies the original issuer, audience, resource and scopes:
+context = NativeMCPContext(
+    caller=caller_from_auth_context(verified_context),
+    action_key=logical_action_key,
+    authorized_tools=frozenset(verified_context.authorized_tool_names),
+    upstream_authorization=verified_context.upstream_authorization,
+)
+response = await proxy.handle(mcp_request, context=context, headers=request_headers)
+```
+
+Render `response.document` as JSON and return its `session_id`, when present,
+in `Mcp-Session-Id`. Native authentication runs on every request; a transport
+session never grants caller authority. Sessions cannot move between callers.
+The application supplies stable logical action keys independently of JSON-RPC
+IDs. Do not execute notification-shaped tool calls.
+
+Select `native_upstream` when the existing HTTP server owns native authorization.
+Its original bearer authorization is required and stays in the local request
+context, including response resumption. Atellagent receives only the verified
+caller summary. Missing delegation refuses the call instead of substituting
+the reporting identity's broader permissions.
+
+Select `native_listener` only when that existing listener has already enforced
+the complete original authorization, including any record/resource rules; a
+tool-name allowlist alone does not replace those rules. Native authentication
+mechanisms that cannot be delegated as HTTP authorization use that existing SDK
+hook/listener integration. Do not translate them into an invented identity header.
+
+Keep the upstream private (stdio, a private socket, or loopback binding) and expose
+only the protected listener. Retain TLS, origin validation, credential separation
+and request-size limits in the owning HTTP application. A listener left publicly
+reachable beside this facade remains a governance bypass.

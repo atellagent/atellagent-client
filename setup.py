@@ -130,6 +130,11 @@ PUBLIC_REPOSITORY_ENTRIES = (
 # file-level inventory. It names only approved release paths; adding any file
 # requires an explicit release-surface decision.
 PUBLIC_SOURCE_PATHS = (
+    "sdk/gateway/request_pool.py",
+    "tests/test_gateway_pool_mtls.py",
+    "tests/test_gateway_request_pool.py",
+    "tests/test_connected_ack_recovery.py",
+    "tests/test_stop_presence_identity_race.py",
     "tests/test_gateway_connect_budget.py",
     "tests/test_onboarding_connect_budget.py",
     "tests/test_stalled_predispatch.py",
@@ -405,8 +410,15 @@ PUBLIC_SOURCE_PATHS = (
     "connected/bridge.py",
     "connected/capability.py",
     "connected/contracts.py",
-    "connected/mcp_client.py",
-    "connected/mcp_errors.py",
+    "proxy/client.py",
+    "proxy/targets.py",
+    "proxy/resource.py",
+    "proxy/native_credentials.py",
+    "proxy/http_transport.py",
+    "proxy/stdio_transport.py",
+    "proxy/errors.py",
+    "tests/test_mcp_resource_proxy.py",
+    "tests/test_mcp_http_transport.py",
     "connected/participant.py",
     "connected/participant_handlers.py",
     "connected/participant_transport.py",
@@ -686,6 +698,7 @@ PUBLIC_SOURCE_PATHS = (
 # runtime/optional-example dependencies named here. The release gate treats
 # every other import root as unapproved.
 PUBLIC_THIRD_PARTY_IMPORT_ROOTS = (
+    "anyio",
     "ntsecuritycon",
     "filelock",
     "win32crypt",
@@ -836,13 +849,12 @@ setup(
         ],
     },
     extras_require={
-        # The compatibility executables use only the core HTTP dependency.  The
-        # named extras keep their install intent explicit without adding an MCP
-        # SDK (and, specifically, no legacy MCP SDK) to ordinary installations.
+        # Wire adapters are optional. Ordinary SDK imports do not load MCP.
         "mcp-agent-proxy": [],
-        "mcp-tool-proxy": [],
+        "mcp-tool-proxy": ["mcp==2.0.0", "anyio==4.14.2"],
         "mcp": [
             "mcp==2.0.0",
+            "anyio==4.14.2",
         ],
         "openai": [
             "openai==2.53.0",

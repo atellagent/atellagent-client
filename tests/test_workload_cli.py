@@ -80,11 +80,11 @@ async def test_private_mcp_and_participant_are_closed_on_failure_or_verify(monke
     if failure == "manifest": bridge.manifest.side_effect = ValueError("bad manifest")
     participant = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), instance_id="fixture")
     if failure == "start": participant.start.side_effect = ValueError("registration failed")
-    monkeypatch.setattr(runtime, "LocalMCPClient", lambda _: bridge)
+    monkeypatch.setattr(runtime, "MCPClient", lambda _: bridge)
     monkeypatch.setattr(runtime, "ConnectedBridge", lambda *args, **kwargs: participant)
     monkeypatch.setattr(runtime, "mount_handler", Mock())
     config = SimpleNamespace(packaging="bridge", integration_type="mcp", deployment=SimpleNamespace(target_transport="stdio"))
-    inputs = WorkloadLocalInputs({"type": "bridge"}, target_idempotent=True)
+    inputs = WorkloadLocalInputs({"type": "bridge"})
     if failure == "none":
         async with runtime.open_participant(config, inputs): pass
     else:
@@ -98,7 +98,7 @@ async def test_private_mcp_and_participant_are_closed_on_failure_or_verify(monke
 @pytest.mark.asyncio
 async def test_unasserted_idempotency_never_starts_target(monkeypatch):
     target = Mock()
-    monkeypatch.setattr(runtime, "LocalMCPClient", target)
+    monkeypatch.setattr(runtime, "MCPClient", target)
     with pytest.raises(ValueError, match="idempotency"):
-        async with runtime.open_participant(SimpleNamespace(), WorkloadLocalInputs({"type": "sdk"})): pass
+        async with runtime.open_participant(SimpleNamespace(integration_type="model"), WorkloadLocalInputs({"type": "sdk"})): pass
     target.assert_not_called()

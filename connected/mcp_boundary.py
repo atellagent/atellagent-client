@@ -4,6 +4,7 @@
 
 import asyncio
 import json
+import httpx
 from hashlib import sha256
 from collections.abc import Mapping
 
@@ -11,6 +12,7 @@ from atellagent_client.governance.actions import ActionDenied, PolicyActionDenie
 from atellagent_client.pep.gateway import GatewayDirectiveVerifier
 from atellagent_client.pep.quota_state import QuotaStateCache, quota_error_detail, QUOTA_CODE
 from .mcp_handler import execute_mcp_handler, prepare_mcp_request
+from .participant_protocol import ConnectedHTTPError
 
 
 class _QuotaAdmission(Exception):
@@ -39,8 +41,23 @@ def _local_action_key(participant, wire):
 async def _boundary_request(participant, phase, payload):
     try:
         async with asyncio.timeout(35):
-            response = await participant._request("POST", f"/v1/mcp/boundary/{phase}", json=payload,
-                **({"preserve_quota":True} if phase == "preflight" else {}))
+            # Snapshot the settlement once. A lost response may follow a
+            # committed result; retry this POST, never the mounted handler.
+            snapshot = json.loads(json.dumps(payload, allow_nan=False))
+            attempts = 4 if phase == "postflight" else 1
+            for attempt in range(attempts):
+                try:
+                    async with asyncio.timeout(8 if phase == "postflight" else 30):
+                        response = await participant._request("POST", f"/v1/mcp/boundary/{phase}", json=snapshot,
+                            **({"preserve_quota":True} if phase == "preflight" else {}))
+                    break
+                except ConnectedHTTPError as exc:
+                    if exc.status_code not in {502, 503, 504} or attempt + 1 == attempts:
+                        raise
+                except (TimeoutError, httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError):
+                    if attempt + 1 == attempts:
+                        raise
+                await asyncio.sleep(.1 * (2 ** attempt))
         result = response.json()
         if not isinstance(result, dict):
             raise ValueError()
@@ -90,7 +107,10 @@ async def handle_direct_mcp_request(participant, request, *, idempotency_key, ca
             except _QuotaAdmission as admission:
                 disposition = await quota.accept_error(429, admission.payload)
         if disposition is not None and disposition.state == 'exhausted':
-            if not disposition.continues_locally:
+            if (not disposition.continues_locally
+                    or participant._mcp_idempotency_mode == "single_dispatch"):
+                # An ordinary target cannot execute without a durable claim.
+                # Do not turn quota passthrough into an untracked replay path.
                 raise ActionDenied(QUOTA_CODE)
             if participant._mcp_publication is None:
                 raise ActionDenied('mcp_publication_unavailable')
@@ -127,8 +147,8 @@ async def handle_direct_mcp_request(participant, request, *, idempotency_key, ca
             raise
         except Exception:
             await _boundary_request(participant, "postflight", {**wire, "action_key": key,
-                "success": False, "error_type": "mcp_handler_failed"})
-            raise ActionDenied("mcp_handler_failed") from None
+                "success": False, "error_type": "mcp_outcome_unknown"})
+            raise ActionDenied("mcp_outcome_unknown") from None
         content = result.get("result", result)
         succeeded = "error" not in result and not (isinstance(content, dict) and content.get("isError") is True)
         settled = await _boundary_request(participant, "postflight", {**wire, "action_key": key,

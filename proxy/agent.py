@@ -14,7 +14,7 @@ from time import monotonic
 from typing import Any, Mapping
 
 from .contracts import _ProxyInvocationPort
-from .tool import LEGACY_MCP_PROTOCOL_VERSIONS, MODERN_MCP_PROTOCOL_VERSION, MCPPeerProtocol
+from .tool import SESSION_MCP_PROTOCOL_VERSIONS, MODERN_MCP_PROTOCOL_VERSION, MCPPeerProtocol
 
 
 _SESSION_HEADER = "mcp-session-id"
@@ -37,35 +37,36 @@ class ProxyResponse:
 
 
 @dataclass(frozen=True)
-class _LegacySession:
+class _Session:
     protocol_version: str
     expires_at: float
+    caller_identity: str | None = None
 
 
-class _LegacySessions:
+class _Sessions:
     """Bounded local negotiation state; never action or policy state."""
 
     def __init__(self, *, ttl_seconds: int, max_sessions: int) -> None:
         self._ttl_seconds = max(1, int(ttl_seconds))
         self._max_sessions = max(1, int(max_sessions))
-        self._sessions: dict[str, _LegacySession] = {}
+        self._sessions: dict[str, _Session] = {}
 
     def create(self, protocol_version: str) -> str:
         self._discard_expired()
         if len(self._sessions) >= self._max_sessions:
-            raise MCPAgentProxyError("legacy MCP session capacity is exhausted")
+            raise MCPAgentProxyError("session MCP session capacity is exhausted")
         session_id = token_urlsafe(32)
-        self._sessions[session_id] = _LegacySession(
+        self._sessions[session_id] = _Session(
             protocol_version=protocol_version,
             expires_at=monotonic() + self._ttl_seconds,
         )
         return session_id
 
-    def get(self, session_id: str | None) -> _LegacySession:
+    def get(self, session_id: str | None) -> _Session:
         self._discard_expired()
         session = self._sessions.get(str(session_id or ""))
         if session is None:
-            raise MCPAgentProxyError("MCP legacy session is unknown or expired")
+            raise MCPAgentProxyError("MCP session session is unknown or expired")
         return session
 
     def close(self, session_id: str | None) -> None:
@@ -117,10 +118,10 @@ def _requested_protocol(document: Mapping[str, Any], headers: Mapping[str, str] 
             if not isinstance(declared, str) or date.fromisoformat(declared).isoformat() != declared:
                 raise ValueError("canonical date revision required")
         except (ValueError, TypeError):
-            raise MCPAgentProxyError("legacy initialize request has an invalid protocol version") from None
+            raise MCPAgentProxyError("initialize request has an invalid protocol version") from None
         if header and header != declared:
             raise MCPAgentProxyError("MCP protocol header and initialize request disagree")
-        return MCPPeerProtocol.LEGACY_STREAMABLE_HTTP
+        return MCPPeerProtocol.STATEFUL
     if method == "server/discover":
         meta = params.get("_meta") if isinstance(params.get("_meta"), Mapping) else {}
         declared = str(meta.get(_PROTOCOL_META_KEY) or header or "").strip()
@@ -129,8 +130,8 @@ def _requested_protocol(document: Mapping[str, Any], headers: Mapping[str, str] 
         return MCPPeerProtocol.MODERN
     if header == MODERN_MCP_PROTOCOL_VERSION:
         return MCPPeerProtocol.MODERN
-    if header in LEGACY_MCP_PROTOCOL_VERSIONS or _header(headers, _SESSION_HEADER):
-        return MCPPeerProtocol.LEGACY_STREAMABLE_HTTP
+    if header in SESSION_MCP_PROTOCOL_VERSIONS or _header(headers, _SESSION_HEADER):
+        return MCPPeerProtocol.STATEFUL
     raise MCPAgentProxyError("MCP peer did not provide a valid protocol negotiation")
 
 
@@ -146,13 +147,13 @@ class MCPAgentProxy:
         self,
         *,
         gateway: _ProxyInvocationPort,
-        legacy_session_ttl_seconds: int = 900,
-        legacy_max_sessions: int = 1024,
+        session_ttl_seconds: int = 900,
+        max_sessions: int = 1024,
     ) -> None:
         self._gateway = gateway
-        self._legacy_sessions = _LegacySessions(
-            ttl_seconds=legacy_session_ttl_seconds,
-            max_sessions=legacy_max_sessions,
+        self._sessions = _Sessions(
+            ttl_seconds=session_ttl_seconds,
+            max_sessions=max_sessions,
         )
         self._stdio_protocol_version: str | None = None
 
@@ -167,11 +168,11 @@ class MCPAgentProxy:
         protocol = _requested_protocol(document, headers)
         method = str(document["method"])
         session_id = _header(headers, _SESSION_HEADER)
-        if protocol is MCPPeerProtocol.LEGACY_STREAMABLE_HTTP and method != "initialize":
-            session = self._legacy_sessions.get(session_id)
+        if protocol is MCPPeerProtocol.STATEFUL and method != "initialize":
+            session = self._sessions.get(session_id)
             header_version = _header(headers, _PROTOCOL_HEADER)
             if header_version and header_version != session.protocol_version:
-                raise MCPAgentProxyError("MCP legacy session protocol changed")
+                raise MCPAgentProxyError("MCP session session protocol changed")
 
         return await self._handle_negotiated(document, protocol, session_id)
 
@@ -187,12 +188,13 @@ class MCPAgentProxy:
         if method == "initialize":
             params = document.get("params") if isinstance(document.get("params"), Mapping) else {}
             requested = str(params.get("protocolVersion") or "")
-            # initialize establishes the handshake era, even when the client
-            # asks for an unknown/newer revision. Offer a supported version;
-            # never echo an unsupported version into the negotiated session.
-            version = requested if requested in LEGACY_MCP_PROTOCOL_VERSIONS else max(LEGACY_MCP_PROTOCOL_VERSIONS)
-            created = None if stdio else self._legacy_sessions.create(version)
-            logger.info("MCP compatibility peer negotiated legacy revision %s", version)
+            # A supported initialize revision is an explicit peer signal.
+            # Unknown revisions refuse; they do not cause a protocol downgrade.
+            if requested not in SESSION_MCP_PROTOCOL_VERSIONS:
+                raise MCPAgentProxyError("MCP initialize revision is unsupported")
+            version = requested
+            created = None if stdio else self._sessions.create(version)
+            logger.info("MCP peer selected session revision %s", version)
             return ProxyResponse(
                 protocol=protocol,
                 session_id=created,
@@ -206,7 +208,7 @@ class MCPAgentProxy:
                 ),
             )
         if method == "server/discover":
-            logger.info("MCP compatibility peer negotiated modern revision %s", MODERN_MCP_PROTOCOL_VERSION)
+            logger.info("MCP peer negotiated modern revision %s", MODERN_MCP_PROTOCOL_VERSION)
             return ProxyResponse(
                 protocol=protocol,
                 document=_result(
@@ -216,7 +218,7 @@ class MCPAgentProxy:
                         "supportedVersions": [MODERN_MCP_PROTOCOL_VERSION],
                         "cacheScope": "private",
                         "ttlMs": 0,
-                        "capabilities": {"tools": True},
+                        "capabilities": {"tools": {}},
                     },
                 ),
             )
@@ -226,8 +228,10 @@ class MCPAgentProxy:
             tools = await self._gateway.list_tools()
             return ProxyResponse(
                 protocol=protocol,
-                session_id=session_id if protocol is MCPPeerProtocol.LEGACY_STREAMABLE_HTTP else None,
-                document=_result(document, {"tools": [tool.as_mcp_tool() for tool in tools]}),
+                session_id=session_id if protocol is MCPPeerProtocol.STATEFUL else None,
+                document=_result(document, {"tools": [tool.as_mcp_tool() for tool in tools],
+                    **({"resultType":"complete", "cacheScope":"private", "ttlMs":0}
+                       if protocol is MCPPeerProtocol.MODERN else {})}),
             )
         if method == "tools/call":
             params = document.get("params")
@@ -252,8 +256,9 @@ class MCPAgentProxy:
                 )
             return ProxyResponse(
                 protocol=protocol,
-                session_id=session_id if protocol is MCPPeerProtocol.LEGACY_STREAMABLE_HTTP else None,
-                document=_result(document, result.as_mcp_result()),
+                session_id=session_id if protocol is MCPPeerProtocol.STATEFUL else None,
+                document=_result(document, {**result.as_mcp_result(),
+                    **({"resultType":"complete"} if protocol is MCPPeerProtocol.MODERN else {})}),
             )
         return ProxyResponse(protocol=protocol, document=_error(document, "MCP method is unsupported", code=-32601))
 

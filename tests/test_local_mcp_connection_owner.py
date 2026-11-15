@@ -2,13 +2,13 @@
 import asyncio
 from types import SimpleNamespace
 import pytest
-from atellagent_client.connected.mcp_client import LocalMCPClient, MCP_PROTOCOL_VERSION
+from atellagent_client.proxy.client import MCPClient, MCP_PROTOCOL_VERSION
 from atellagent_client.sdk.config_models import BridgeDeploymentConfig
 
 
 def owned_transport(monkeypatch, *, fail_call=False, pause_discovery=False, pause_close=False):
     import mcp
-    import mcp.client.stdio
+    import atellagent_client.proxy.stdio_transport as stdio_transport
     entered, release, closing, finish = (asyncio.Event() for _ in range(4))
     opened, closed, calls = [], [], []
     class Client:
@@ -34,8 +34,8 @@ def owned_transport(monkeypatch, *, fail_call=False, pause_discovery=False, paus
             if fail_call: raise ValueError('owned original call failure')
             return SimpleNamespace(model_dump=lambda **_:{'content':[]})
     monkeypatch.setattr(mcp, 'Client', Client)
-    monkeypatch.setattr(mcp.client.stdio, 'stdio_client', lambda _:object())
-    target = LocalMCPClient(BridgeDeploymentConfig(target_transport='stdio', target_command='owned-unused'))
+    monkeypatch.setattr(stdio_transport, 'bounded_stdio_client', lambda _:object())
+    target = MCPClient(BridgeDeploymentConfig(target_transport='stdio', target_command='owned-unused'))
     return SimpleNamespace(target=target, entered=entered, release=release, closing=closing, finish=finish,
         opened=opened, closed=closed, calls=calls)
 
@@ -56,7 +56,7 @@ async def test_delivery_error_closes_in_owner_and_preserves_failure_without_retr
     with pytest.raises(ValueError, match='owned original call failure'):
         await asyncio.create_task(c.target.invoke(request,'same-owned-effect'))
     assert c.opened == c.closed and len(c.calls) == 1
-    assert c.calls[0][1] == {'meta':{'atellagent/idempotencyKey':'same-owned-effect'}}
+    assert c.calls[0][1] == {'meta':{'atellagent/idempotencyKey':'same-owned-effect'}, 'allow_input_required':False, 'allow_claimed':False}
 
 
 @pytest.mark.asyncio
@@ -152,7 +152,7 @@ async def test_real_stdio_cross_task_cleanup_reaps_owned_target(tmp_path, fail_c
         '            continue\n'
     )
     server.write_text(source)
-    target = LocalMCPClient(BridgeDeploymentConfig(
+    target = MCPClient(BridgeDeploymentConfig(
         target_transport='stdio', target_command=sys.executable,
         target_args=['-u', str(server), str(pid_file), str(calls_file)]))
     try:
@@ -230,7 +230,7 @@ async def test_real_stdio_cancelled_discovery_reaps_owned_target(tmp_path):
         '            while True: time.sleep(.01)\n'
     )
     server.write_text(source)
-    target = LocalMCPClient(BridgeDeploymentConfig(
+    target = MCPClient(BridgeDeploymentConfig(
         target_transport='stdio', target_command=sys.executable,
         target_args=['-u', str(server), str(pid_file), str(waiting)]))
     manifest = asyncio.create_task(target.manifest())
@@ -250,3 +250,84 @@ async def test_real_stdio_cancelled_discovery_reaps_owned_target(tmp_path):
             manifest.cancel()
         await asyncio.gather(manifest, return_exceptions=True)
         await target.close()
+
+
+@pytest.mark.asyncio
+async def test_real_stdio_input_request_never_repeats_the_authorized_call(tmp_path):
+    import json
+    import sys
+    from pathlib import Path
+
+    reference = Path(__file__).parent / 'fixtures' / 'modern_mcp_reference_server.py'
+    server, calls = tmp_path / 'input_required_server.py', tmp_path / 'calls.jsonl'
+    source = reference.read_text().replace('import sys\n', 'import sys\nfrom pathlib import Path\n')
+    source = source.replace('    print(\n',
+        '    if method == "tools/call":\n'
+        '        with Path(sys.argv[1]).open("a") as log:\n'
+        '            log.write(json.dumps(request) + "\\n")\n'
+        '        result = {"resultType":"input_required", "requestState":"continuation", '
+        '"inputRequests":{"roots":{"method":"roots/list"}}}\n'
+        '    print(\n')
+    server.write_text(source)
+    target = MCPClient(BridgeDeploymentConfig(target_transport='stdio',
+        target_command=sys.executable, target_args=['-u', str(server), str(calls)]))
+    try:
+        await target.manifest()
+        with pytest.raises(RuntimeError, match='InputRequiredResult'):
+            await target.invoke({'jsonrpc':'2.0', 'id':'one', 'method':'tools/call',
+                'params':{'name':'echo', 'arguments':{}}}, 'one-authorized-action')
+        assert len([json.loads(line) for line in calls.read_text().splitlines()]) == 1
+    finally:
+        await target.close()
+
+
+@pytest.mark.asyncio
+async def test_real_ordinary_stdio_server_needs_no_custom_extension(tmp_path):
+    import sys
+    from pathlib import Path
+    reference = Path(__file__).parent / 'fixtures' / 'modern_mcp_reference_server.py'
+    server = tmp_path / 'ordinary_server.py'
+    source = reference.read_text().replace(
+        '"capabilities": {"tools": {}, "experimental": {\n'
+        '                "atellagent/durableIdempotency": {"key": "atellagent/idempotencyKey", "durable": True}}},',
+        '"capabilities": {"tools": {}},')
+    assert 'atellagent/durableIdempotency' not in source
+    server.write_text(source)
+    target = MCPClient(BridgeDeploymentConfig(target_transport='stdio',
+        target_command=sys.executable, target_args=['-u', str(server)]))
+    try:
+        assert (await target.manifest())["tools"][0]["name"] == "echo"
+        assert target.advertises_durable_idempotency is False
+        reply = await target.invoke({"jsonrpc":"2.0", "id":7, "method":"tools/call",
+            "params":{"name":"echo", "arguments":{}}}, "ordinary-action")
+        assert reply["result"]["content"][0]["text"] == "ok"
+    finally:
+        await target.close()
+
+
+@pytest.mark.asyncio
+async def test_oversized_unterminated_stdio_frame_is_stopped_before_buffer_growth(tmp_path):
+    import json
+    import os
+    import sys
+    from pathlib import Path
+    reference=Path(__file__).parent/'fixtures'/'modern_mcp_reference_server.py'
+    server, pid_file, calls=tmp_path/'large_server.py',tmp_path/'pid',tmp_path/'calls'
+    source=reference.read_text().replace('import sys\n',
+        'import sys\nimport os\nfrom pathlib import Path\nPath(sys.argv[1]).write_text(str(os.getpid()))\n')
+    source=source.replace('    elif method == "tools/call":\n',
+        '    elif method == "tools/call":\n'
+        '        Path(sys.argv[2]).write_text("one")\n'
+        '        sys.stdout.write("x"*(2*1024*1024)); sys.stdout.flush()\n'
+        '        continue\n')
+    server.write_text(source)
+    target=MCPClient(BridgeDeploymentConfig(target_transport='stdio',target_command=sys.executable,
+        target_args=['-u',str(server),str(pid_file),str(calls)]),timeout_seconds=5)
+    try:
+        await target.manifest()
+        with pytest.raises(Exception):
+            await target.invoke({'jsonrpc':'2.0','id':1,'method':'tools/call',
+                'params':{'name':'echo','arguments':{}}},'one-action')
+        assert calls.read_text()=='one'
+    finally: await target.close()
+    with pytest.raises(ProcessLookupError): os.kill(int(pid_file.read_text()),0)
